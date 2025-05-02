@@ -159,10 +159,6 @@ func (rt *ruleRT) doDual(src *http.Request, sec string, strong bool) (*http.Resp
 	return nil, resA.err
 }
 
-// --------------------------------------------------------------------
-// Helpers (same as before)
-// --------------------------------------------------------------------
-
 type result struct {
 	resp *http.Response
 	err  error
@@ -204,7 +200,6 @@ func drainBody(r *http.Request) (io.ReadCloser, io.ReadCloser, error) {
 	}
 	return io.NopCloser(bytes.NewReader(b)), io.NopCloser(bytes.NewReader(b)), nil
 }
-
 
 // s3op maps (method, path, query) → canonical S3 operation string.
 func s3op(r *http.Request) string {

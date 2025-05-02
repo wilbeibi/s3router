@@ -102,7 +102,7 @@ rules:
 1. Parse bucket + key from the URL (virtual‑host or path style).
 2. Pick the rule whose prefix is the longest match (photos/raw/ > photos/* > */*).
 3. Inside that block choose the S3 operation (PutObject, ListObjectsV2, …); default to "*" if absent.
-4. Execute one of the 5 keyword behaviours.
+4. Execute one of the 5 keyword behaviors.
 
 All look‑ups are O(1) map accesses.
 
@@ -110,25 +110,7 @@ All look‑ups are O(1) map accesses.
 
 The default helper buffers the whole body to replay it to the replica. Swap in a streaming version (io.TeeReader → temp file) for multi‑GB PUTs.
 
-## ✦ Hot reload (optional)
-
-```go
-var rtab atomic.Value // holds *http.RoundTripper
-go func() {
-    w, _ := fsnotify.NewWatcher()
-    w.Add("router.yaml")
-    for range w.Events {
-        cfg, err := s3router.LoadConfig("router.yaml")
-        if err != nil { log.Printf("bad config: %v", err); continue }
-        rt, _ := s3router.New(cfg)
-        rtab.Store(rt)                       // atomic swap
-    }
-}()
-```
-
 ## ✦ Tests
-
-Run the built‑in suite (uses httptest.Server):
 
 ```bash
 go test ./...
@@ -138,8 +120,8 @@ Covers mirror, best‑effort, fallback, and primary scenarios.
 
 ## ✦ Roadmap
 
-- Prometheus metrics hook.
-- Per‑rule time‑out knobs.
+- Swap in a streaming version (io.TeeReader → temp file) for multi‑GB PUTs.
+- Metrics hook.
 - Optional third endpoint ("tertiary") support.
 
 ## ✦ License

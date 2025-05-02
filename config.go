@@ -1,4 +1,3 @@
-// s3router/config.go
 package s3router
 
 import (
@@ -9,8 +8,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
-
-// ---------------- YAML schema ---------------------------------------------
 
 type yamlRule struct {
 	Bucket string                       `yaml:"bucket"`
@@ -79,13 +76,12 @@ func LoadConfig(path string) (*Config, error) {
 			}
 			buckets[bucket][prefix] = ops
 		}
-		// build yamlRule slice
+
 		for bucket, pm := range buckets {
 			y.Rules = append(y.Rules, yamlRule{Bucket: bucket, Prefix: pm})
 		}
 	}
 
-	// ---- sanity checks ----------------------------------------------------
 	if _, ok := y.Endpoints["primary"]; !ok {
 		return nil, fmt.Errorf("missing mandatory endpoint \"primary\"")
 	}
