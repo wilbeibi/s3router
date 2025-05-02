@@ -2,10 +2,10 @@
 
 `s3router` is a lightweight `http.RoundTripper` that **routes S3‑compatible HTTP traffic** between exactly two storage endpoints—`primary` and `secondary`—using a declarative YAML file.
 
-Typical use‑cases ⬇︎
+Typical use‑cases ⬇
 * **Mirrored writes** for warm‑replica durability.
 * **Best‑effort replicas** that never break the primary path.
-* **Read fallback** when the primary region degrades.
+* **Read fallback** when the primary path degrades.
 * Incremental **bucket migration** (prefix‑by‑prefix).
 
 It works under the AWS Go SDK v1 **and** v2, or any plain `http.Client`‑based code.
@@ -48,7 +48,7 @@ awsCfg, _ := config.LoadDefaultConfig(context.TODO(),
 s3Client := s3.NewFromConfig(awsCfg) 
 
 // This PutObject now follows your routing rules.
-*, * = s3.PutObject(ctx, &s3.PutObjectInput{
+_, err := s3.PutObject(ctx, &s3.PutObjectInput{
     Bucket: aws.String("photos"),
     Key:    aws.String("raw/cat.jpg"),
     Body:   bytes.NewReader(img),
@@ -67,7 +67,7 @@ rules:
     prefix:
       "raw/":
         PutObject:    mirror       # both copies must succeed
-        DeleteObject: best-effort  # ignore replica errors
+        DeleteObject: best-effort  # ignore secondary errors
         GetObject:    fallback     # read fallback
         "*":          fallback     # default for this prefix
       "processed/":
@@ -82,20 +82,13 @@ rules:
 
 ## 5 keywords
 
-| Keyword     | Behavior                                                         |
-| ----------- | ---------------------------------------------------------------- |
-| primary     | Always primary only.                                             |
-| secondary   | Always secondary only.                                           |
-| fallback    | Primary; if network error or HTTP ≥ 500 → secondary.             |
-| best‑effort | PUT/DELETE on both; return primary result even on replica error. |
-| mirror      | PUT/DELETE on both; fail if either copy errors.                  |
-
-## Validation rules
-
-- primary endpoint must exist.
-- If any rule uses mirror, best‑effort, or fallback, secondary must exist.
-- Each (bucket,prefix) appears once and contains a "*": … default.
-- Unknown keywords abort startup.
+| Keyword     | Behavior                                                     |
+| ----------- | ------------------------------------------------------------ |
+| primary     | Always primary only.                                         |
+| secondary   | Always secondary only.                                       |
+| fallback    | Primary; if network error or HTTP ≥ 500 → secondary.         |
+| best‑effort | send to both; return primary result even on secondary error. |
+| mirror      | send to both; fail if either copy errors.                    |
 
 ## ✦ Routing algorithm
 
@@ -106,9 +99,6 @@ rules:
 
 All look‑ups are O(1) map accesses.
 
-## ✦ Large uploads
-
-The default helper buffers the whole body to replay it to the replica. Swap in a streaming version (io.TeeReader → temp file) for multi‑GB PUTs.
 
 ## ✦ Tests
 
