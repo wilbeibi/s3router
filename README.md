@@ -21,7 +21,7 @@ It works under the AWS Go SDK v1 **and** v2, or any plain `http.Client`‑based 
 | s3router              | → fallback    → primary │ secondary
 +-----------------------+ → best-effort → primary + secondary*
 │                         → primary     → primary
-▼
+▼                         → secondary   → secondary
 +-----------------------+
 | net/http Transport    |
 +-----------------------+
@@ -59,25 +59,25 @@ _, err := s3.PutObject(ctx, &s3.PutObjectInput{
 
 ```yaml
 endpoints:
-  primary:   https://s3.us‑west‑1.amazonaws.com
+  primary: https://s3.us-west-1.amazonaws.com
   secondary: https://r2.cloudflarestorage.com
 
 rules:
   - bucket: photos
     prefix:
       "raw/":
-        PutObject:    mirror       # both copies must succeed
-        DeleteObject: best-effort  # ignore secondary errors
-        GetObject:    fallback     # read fallback
-        "*":          fallback     # default for this prefix
+        PutObject: mirror        # both copies must succeed
+        DeleteObject: best-effort # ignore secondary errors
+        GetObject: fallback      # read fallback
+        "*": fallback            # default for this prefix
       "processed/":
-        "*":         secondary     # always secondary
-      "*":                         # catch‑all inside bucket
-        "*":         primary
+        "*": secondary           # always secondary
+      "*":                       # catch-all inside bucket
+        "*": primary
   - bucket: logs
     prefix:
       "*":
-        "*":         fallback
+        "*": fallback
 ```
 
 ## 5 keywords
@@ -86,7 +86,7 @@ rules:
 | ----------- | ------------------------------------------------------------ |
 | primary     | Always primary only.                                         |
 | secondary   | Always secondary only.                                       |
-| fallback    | Primary; if network error or HTTP ≥ 500 → secondary.         |
+| fallback    | Primary; if network error or HTTP ≥ 400 → secondary.         |
 | best‑effort | send to both; return primary result even on secondary error. |
 | mirror      | send to both; fail if either copy errors.                    |
 

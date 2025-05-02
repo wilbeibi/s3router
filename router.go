@@ -120,7 +120,7 @@ func (rt *ruleRT) pickSecondary(a action) string {
 
 func (rt *ruleRT) doFallback(src *http.Request, sec string) (*http.Response, error) {
 	resp, err := rt.tPrimary.RoundTrip(rewrite(src, rt.endpoints["primary"]))
-	if err == nil && resp.StatusCode < 500 {
+	if err == nil && resp.StatusCode < 400 {
 		return resp, nil
 	}
 	return rt.tPrimary.RoundTrip(rewrite(src, rt.endpoints[sec]))
