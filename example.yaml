@@ -1,0 +1,28 @@
+endpoints:
+  primary: https://s3.us‑west‑1.amazonaws.com
+  secondary: https://r2.cloudflarestorage.com
+
+# ------------------------------------------------------------
+# One list – one entry = (bucket, prefix) rule
+# ------------------------------------------------------------
+
+# Each op has 4 options:
+# - mirror
+# - best-effort
+# - fallback
+# - primary
+# - secondary
+
+rules:
+  - bucket: photos
+    prefix:
+      "raw/":
+        PutObject: mirror # primary & secondary must succeed
+        DeleteObject: best-effort # if primary fails, return secondary's resp
+        CompleteMultipartUpload: mirror
+        GetObject: fallback
+        "*": fallback # all other ops → fallback read path
+      "processed/":
+        "*": secondary
+      "*": # remaining prefixes
+        "*": primary
