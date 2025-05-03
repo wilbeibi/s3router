@@ -14,7 +14,7 @@ endpoints:
 # - secondary
 
 rules:
-  - bucket: photos
+  - bucket: photos@primary:cf-photos@secondary
     prefix:
       "raw/":
         PutObject: mirror # primary & secondary must succeed

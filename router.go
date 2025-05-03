@@ -2,7 +2,7 @@ package s3router
 
 import (
 	"bytes"
-	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -24,10 +24,7 @@ func New(cfg *Config) (http.RoundTripper, error) {
 		}
 		rt.endpoints[name] = u
 	}
-	rt.sorted = map[string][]string{} // bucket → sorted prefixes
-	for b, p := range cfg.Rules {
-		rt.sorted[b] = p.sortedPrefixes()
-	}
+	// No need for rt.sorted anymore
 	return rt, nil
 }
 
@@ -38,39 +35,45 @@ func New(cfg *Config) (http.RoundTripper, error) {
 type ruleRT struct {
 	cfg       *Config
 	endpoints map[string]*url.URL
-	sorted    map[string][]string // bucket → prefixes sorted by length
-
-	tPrimary http.RoundTripper
+	tPrimary  http.RoundTripper
 }
 
 func (rt *ruleRT) RoundTrip(req *http.Request) (*http.Response, error) {
 	bucket, key := parseS3Path(req)
 	op := s3op(req)
 
-	action, sec, found := rt.lookup(bucket, key, op)
+	rule, action, found := rt.lookupAction(bucket, key, op)
 	if !found {
-		// no rule → primary
+		// no rule -> primary
+		// Apply potential alias for wildcard bucket if needed (unlikely but safe)
+		wildcardRule, _, wildcardFound := rt.lookupAction("*", key, op)
+		if wildcardFound {
+			applyAlias(req, wildcardRule, "primary")
+		}
 		return rt.tPrimary.RoundTrip(rewrite(req, rt.endpoints["primary"]))
 	}
 
 	switch action {
 	case actPrimary:
+		applyAlias(req, rule, "primary")
 		return rt.tPrimary.RoundTrip(rewrite(req, rt.endpoints["primary"]))
 
 	case actSecondary:
-		return rt.tPrimary.RoundTrip(rewrite(req, rt.endpoints[sec]))
+		secEpName := "secondary" // TODO: make configurable if needed
+		applyAlias(req, rule, secEpName)
+		return rt.tPrimary.RoundTrip(rewrite(req, rt.endpoints[secEpName]))
 
 	case actFallback:
-		return rt.doFallback(req, sec)
+		return rt.doFallback(req, rule)
 
 	case actBestEffort:
-		return rt.doDual(req, sec, false)
+		return rt.doDual(req, rule, false)
 
 	case actMirror:
-		return rt.doDual(req, sec, true)
+		return rt.doDual(req, rule, true)
 
 	default:
-		return nil, errors.New("unknown action " + string(action))
+		return nil, fmt.Errorf("internal error: unknown action %q from lookup", action)
 	}
 }
 
@@ -78,39 +81,48 @@ func (rt *ruleRT) RoundTrip(req *http.Request) (*http.Response, error) {
 // Routing lookup
 // --------------------------------------------------------------------
 
-func (rt *ruleRT) lookup(bucket, key, op string) (action, string, bool) {
-	prefMap, ok := rt.cfg.Rules[bucket]
-	if !ok {
-		// try /* rule
-		prefMap, ok = rt.cfg.Rules["*"]
-		if !ok {
-			return "", "", false
-		}
-	}
-
-	// longest‑prefix‑wins
-	for _, pref := range rt.sorted[bucket] {
-		if pref != "*" && !strings.HasPrefix(key, pref) {
+// lookupAction finds the best matching rule and the effective action for the request.
+func (rt *ruleRT) lookupAction(bucket, key, op string) (Rule, action, bool) {
+	for _, r := range rt.cfg.Rules {
+		if r.Bucket != bucket && r.Bucket != "*" {
 			continue
 		}
-		ops := prefMap[pref]
-		if a, ok := ops[op]; ok {
-			return a, rt.pickSecondary(a), true
+		if r.Prefix != "*" && r.Prefix != "" && !strings.HasPrefix(key, r.Prefix) {
+			continue
 		}
-		return ops["*"], rt.pickSecondary(ops["*"]), true
+
+		// Found a matching rule (due to sorting, it's the most specific one)
+		if act, ok := r.ActionFor[op]; ok {
+			return r, act, true // Exact op match
+		}
+		if act, ok := r.ActionFor["*"]; ok {
+			return r, act, true // Fallback to wildcard op
+		}
+		return Rule{}, "", false
 	}
-	return "", "", false
+	return Rule{}, "", false
 }
 
-// pick secondary name from action token
-func (rt *ruleRT) pickSecondary(a action) string {
-	switch a {
-	case actSecondary:
-		return "secondary"
-	case actMirror, actBestEffort, actFallback:
-		return "secondary" // hard‑coded per example; extend if multiple
-	default:
-		return ""
+// applyAlias modifies the request URL (path-style or virtual-host) to use
+// the bucket alias for the given endpoint, if one exists in the rule.
+func applyAlias(r *http.Request, rule Rule, ep string) {
+	if rule.Alias == nil {
+		return
+	}
+	newName, ok := rule.Alias[ep]
+	if !ok || newName == "" || newName == rule.Bucket {
+		return // No alias for this endpoint, or it's the same as canonical
+	}
+
+	// path-style  /bucket/key...
+	if p := strings.TrimPrefix(r.URL.Path, "/"); strings.HasPrefix(p, rule.Bucket+"/") || p == rule.Bucket {
+		r.URL.Path = "/" + newName + strings.TrimPrefix(p, rule.Bucket)
+		return
+	}
+
+	// virtual-host  bucket.s3.amazonaws.com
+	if h := r.URL.Hostname(); strings.HasPrefix(h, rule.Bucket+".") {
+		r.URL.Host = strings.Replace(h, rule.Bucket+".", newName+".", 1)
 	}
 }
 
@@ -118,25 +130,46 @@ func (rt *ruleRT) pickSecondary(a action) string {
 // Action handlers
 // --------------------------------------------------------------------
 
-func (rt *ruleRT) doFallback(src *http.Request, sec string) (*http.Response, error) {
-	resp, err := rt.tPrimary.RoundTrip(rewrite(src, rt.endpoints["primary"]))
+func (rt *ruleRT) doFallback(src *http.Request, rule Rule) (*http.Response, error) {
+	secEpName := "secondary"
+
+	// Attempt 1: Primary
+	req1 := clone(src, nil)
+	req1 = rewrite(req1, rt.endpoints["primary"])
+	applyAlias(req1, rule, "primary")
+	resp, err := rt.tPrimary.RoundTrip(req1)
+
 	if err == nil && resp.StatusCode < 400 {
 		return resp, nil
 	}
-	return rt.tPrimary.RoundTrip(rewrite(src, rt.endpoints[sec]))
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
+
+	// Attempt 2: Secondary
+	req2 := clone(src, nil)
+	req2 = rewrite(req2, rt.endpoints[secEpName])
+	applyAlias(req2, rule, secEpName)
+	return rt.tPrimary.RoundTrip(req2)
 }
 
-func (rt *ruleRT) doDual(src *http.Request, sec string, strong bool) (*http.Response, error) {
+func (rt *ruleRT) doDual(src *http.Request, rule Rule, strong bool) (*http.Response, error) {
+	secEpName := "secondary"
 	p1 := rt.endpoints["primary"]
-	p2 := rt.endpoints[sec]
+	p2 := rt.endpoints[secEpName]
 
 	b1, b2, err := drainBody(src)
 	if err != nil {
 		return nil, err
 	}
 
-	req1 := rewrite(clone(src, b1), p1)
-	req2 := rewrite(clone(src, b2), p2)
+	req1 := clone(src, b1)
+	req1 = rewrite(req1, p1)
+	applyAlias(req1, rule, "primary")
+
+	req2 := clone(src, b2)
+	req2 = rewrite(req2, p2)
+	applyAlias(req2, rule, secEpName)
 
 	c := make(chan result, 2)
 	go send(rt.tPrimary, req1, c)

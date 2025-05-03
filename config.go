@@ -38,13 +38,17 @@ var reserved = map[string]struct{}{
 	string(actBestEffort): {},
 }
 
-type opMap map[string]action   // op → action
-type preMap map[string]opMap   // prefix → opMap (longest prefix wins)
-type buckMap map[string]preMap // bucket → preMap
+// Rule defines a routing rule for a specific bucket/prefix combination.
+type Rule struct {
+	Bucket    string            // Canonical (primary) bucket name
+	Alias     map[string]string // Optional: endpoint -> bucket name override
+	Prefix    string            // Prefix within the bucket ("" means root)
+	ActionFor map[string]action // op -> action (must contain "*")
+}
 
 type Config struct {
 	Endpoints map[string]string
-	Rules     buckMap
+	Rules     []Rule // Sorted by Bucket, then longest Prefix first
 }
 
 // ---------------- Loader + validation -------------------------------------
@@ -60,9 +64,8 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// support shorthand 'routes' format
+	// support shorthand 'routes' format (convert to rules)
 	if len(y.Rules) == 0 && len(y.Routes) > 0 {
-		// group routes by bucket
 		buckets := make(map[string]map[string]map[string]string)
 		for route, ops := range y.Routes {
 			parts := strings.SplitN(route, "/", 2)
@@ -76,7 +79,7 @@ func LoadConfig(path string) (*Config, error) {
 			}
 			buckets[bucket][prefix] = ops
 		}
-
+		y.Rules = nil // Clear routes now that they are converted
 		for bucket, pm := range buckets {
 			y.Rules = append(y.Rules, yamlRule{Bucket: bucket, Prefix: pm})
 		}
@@ -86,49 +89,71 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, fmt.Errorf("missing mandatory endpoint \"primary\"")
 	}
 
-	compiled := make(buckMap)
+	var rules []Rule
+	for _, yr := range y.Rules {
+		// Parse bucket string (e.g., "bucket@primary:alias@secondary")
+		aliasMap := map[string]string{}
+		canonBucket := ""
+		for _, tok := range strings.Split(yr.Bucket, ":") {
+			parts := strings.SplitN(tok, "@", 2)
+			name, ep := parts[0], "primary"
+			if len(parts) == 2 {
+				ep = parts[1]
+			}
+			if name == "" {
+				return nil, fmt.Errorf("empty bucket name in rule: %q", yr.Bucket)
+			}
+			if ep == "primary" {
+				canonBucket = name
+			}
+			aliasMap[ep] = name
+		}
+		if canonBucket == "" {
+			return nil, fmt.Errorf("rule missing primary bucket definition (@primary): %q", yr.Bucket)
+		}
 
-	for _, r := range y.Rules {
-		if r.Bucket == "" {
-			return nil, fmt.Errorf("rule with empty bucket")
+		if len(yr.Prefix) == 0 {
+			return nil, fmt.Errorf("bucket %q: rule block is empty", yr.Bucket)
 		}
-		if len(r.Prefix) == 0 {
-			return nil, fmt.Errorf("bucket %q: no prefix map", r.Bucket)
-		}
-		prefMap := compiled[r.Bucket]
-		if prefMap == nil {
-			prefMap = make(preMap)
-			compiled[r.Bucket] = prefMap
-		}
-		for prefix, ops := range r.Prefix {
-			if _, dup := prefMap[prefix]; dup {
-				return nil, fmt.Errorf("duplicate rule for bucket=%s prefix=%s", r.Bucket, prefix)
+
+		// Create a Rule for each prefix
+		for prefix, ops := range yr.Prefix {
+			if len(ops) == 0 {
+				return nil, fmt.Errorf("bucket %q prefix %q: no operations defined", yr.Bucket, prefix)
 			}
 			if _, ok := ops["*"]; !ok {
-				return nil, fmt.Errorf("bucket=%s prefix=%s: missing \"*\" default", r.Bucket, prefix)
+				return nil, fmt.Errorf("bucket %q prefix %q: missing default \"*\" operation", yr.Bucket, prefix)
 			}
-			actionMap := make(opMap)
+
+			actionMap := make(map[string]action)
 			for op, tok := range ops {
 				act := action(strings.ToLower(tok))
 				if _, ok := reserved[string(act)]; !ok {
-					return nil, fmt.Errorf("bucket=%s prefix=%s op=%s: unknown action %q",
-						r.Bucket, prefix, op, tok)
+					return nil, fmt.Errorf("bucket %q prefix %q op %q: unknown action %q",
+						yr.Bucket, prefix, op, tok)
 				}
 				actionMap[op] = act
 			}
-			prefMap[prefix] = actionMap
+
+			// Create the final Rule object
+			rule := Rule{
+				Bucket:    canonBucket,
+				Alias:     aliasMap,
+				Prefix:    prefix, // Use the specific prefix from the map key
+				ActionFor: actionMap,
+			}
+			rules = append(rules, rule)
 		}
 	}
 
-	return &Config{Endpoints: y.Endpoints, Rules: compiled}, nil
-}
+	// Sort rules: by canonical bucket, then longest prefix first
+	sort.Slice(rules, func(i, j int) bool {
+		if rules[i].Bucket != rules[j].Bucket {
+			return rules[i].Bucket < rules[j].Bucket
+		}
+		// Secondary sort: longest prefix wins
+		return len(rules[i].Prefix) > len(rules[j].Prefix)
+	})
 
-// helper: return list of prefixes sorted by length (desc) for fastest match
-func (p preMap) sortedPrefixes() []string {
-	ps := make([]string, 0, len(p))
-	for k := range p {
-		ps = append(ps, k)
-	}
-	sort.Slice(ps, func(i, j int) bool { return len(ps[i]) > len(ps[j]) })
-	return ps
+	return &Config{Endpoints: y.Endpoints, Rules: rules}, nil
 }

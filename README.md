@@ -17,11 +17,11 @@ It works under the AWS Go SDK v1 **and** v2, or any plain `http.Client`‑based 
 +-----------------------+
 │ PutObject photos/raw/*
 ▼
++-----------------------+ → primary     → primary
+| s3router              | → secondary   → secondary
 +-----------------------+ → mirror      → primary + secondary
-| s3router              | → fallback    → primary │ secondary
-+-----------------------+ → best-effort → primary + secondary*
-│                         → primary     → primary
-▼                         → secondary   → secondary
+│                         → best-effort → primary + secondary*
+▼                         → fallback    → primary │ secondary
 +-----------------------+
 | net/http Transport    |
 +-----------------------+
@@ -63,7 +63,7 @@ endpoints:
   secondary: https://r2.cloudflarestorage.com
 
 rules:
-  - bucket: photos
+  - bucket: s3photos@primary:r2photos@secondary
     prefix:
       "raw/":
         PutObject: mirror        # both copies must succeed
@@ -86,9 +86,9 @@ rules:
 | ----------- | ------------------------------------------------------------ |
 | primary     | Always primary only.                                         |
 | secondary   | Always secondary only.                                       |
-| fallback    | Primary; if network error or HTTP ≥ 400 → secondary.         |
-| best‑effort | send to both; return primary result even on secondary error. |
 | mirror      | send to both; fail if either copy errors.                    |
+| best‑effort | send to both; return primary result even on secondary error. |
+| fallback    | Primary; if network error or HTTP ≥ 400 → secondary.         |
 
 ## ✦ Routing algorithm
 
@@ -105,8 +105,6 @@ All look‑ups are O(1) map accesses.
 ```bash
 go test ./...
 ```
-
-Covers mirror, best‑effort, fallback, and primary scenarios.
 
 ## ✦ Roadmap
 

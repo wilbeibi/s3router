@@ -35,10 +35,10 @@ func hits(i *int32) int { return int(atomic.LoadInt32(i)) }
 const yamlTemplate = `
 endpoints:
   primary:   %[1]s
-  secondary:    %[2]s
+  secondary: %[2]s
 
 rules:
-  - bucket: photos
+  - bucket: photos@primary:test-photos@secondary
     prefix:
       "raw/":
         PutObject:   mirror
