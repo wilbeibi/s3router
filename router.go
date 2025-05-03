@@ -59,7 +59,7 @@ func (rt *ruleRT) RoundTrip(req *http.Request) (*http.Response, error) {
 		return rt.tPrimary.RoundTrip(rewrite(req, rt.endpoints["primary"]))
 
 	case actSecondary:
-		secEpName := "secondary" // TODO: make configurable if needed
+		secEpName := "secondary"
 		applyAlias(req, rule, secEpName)
 		return rt.tPrimary.RoundTrip(rewrite(req, rt.endpoints[secEpName]))
 

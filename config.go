@@ -41,7 +41,7 @@ var reserved = map[string]struct{}{
 // Rule defines a routing rule for a specific bucket/prefix combination.
 type Rule struct {
 	Bucket    string            // Canonical (primary) bucket name
-	Alias     map[string]string // Optional: endpoint -> bucket name override
+	Alias     map[string]string // Endpoint (primary, secondary) -> bucket name override
 	Prefix    string            // Prefix within the bucket ("" means root)
 	ActionFor map[string]action // op -> action (must contain "*")
 }

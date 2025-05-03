@@ -41,15 +41,12 @@ cfg, _ := s3router.LoadConfig("router.yaml") // 1) parse & validate
 rt,  _ := s3router.New(cfg)                  // 2) compile router
 client := &http.Client{Transport: rt}        // 3) use everywhere
 
-// AWS SDK v2 setup with custom transport
 awsCfg, _ := config.LoadDefaultConfig(context.TODO(),
     config.WithHTTPClient(client),
 )
 s3Client := s3.NewFromConfig(awsCfg) 
-
-// This PutObject now follows your routing rules.
 _, err := s3.PutObject(ctx, &s3.PutObjectInput{
-    Bucket: aws.String("photos"),
+    Bucket: aws.String("s3photos"),
     Key:    aws.String("raw/cat.jpg"),
     Body:   bytes.NewReader(img),
 })
