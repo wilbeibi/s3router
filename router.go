@@ -158,7 +158,14 @@ func (rt *ruleRT) doDual(src *http.Request, rule Rule, strong bool) (*http.Respo
 	p1 := rt.endpoints["primary"]
 	p2 := rt.endpoints[secEpName]
 
-	b1, b2, err := drainBody(src)
+	// choose streaming for large bodies (>1GB), else buffer in memory
+	var b1, b2 io.ReadCloser
+	var err error
+	if src.ContentLength > (1 << 30) {
+		b1, b2, err = teeBody(src)
+	} else {
+		b1, b2, err = drainBody(src)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -181,13 +188,30 @@ func (rt *ruleRT) doDual(src *http.Request, rule Rule, strong bool) (*http.Respo
 	// choose primary's view
 	if resA.err == nil && resA.resp.StatusCode < 500 {
 		if strong && (resB.err != nil || resB.resp.StatusCode >= 500) {
-			_ = resA.resp.Body.Close()
+			if resA.resp != nil && resA.resp.Body != nil {
+				resA.resp.Body.Close()
+			}
 			return nil, resB.err
+		}
+		// Close secondary response body if not needed
+		if resB.resp != nil && resB.resp.Body != nil {
+			resB.resp.Body.Close()
 		}
 		return resA.resp, nil
 	}
 	if !strong && resB.err == nil && resB.resp.StatusCode < 500 {
+		// Close primary response body if using secondary
+		if resA.resp != nil && resA.resp.Body != nil {
+			resA.resp.Body.Close()
+		}
 		return resB.resp, nil
+	}
+
+	if resA.resp != nil && resA.resp.Body != nil {
+		resA.resp.Body.Close()
+	}
+	if resB.resp != nil && resB.resp.Body != nil {
+		resB.resp.Body.Close()
 	}
 	return nil, resA.err
 }
@@ -232,6 +256,28 @@ func drainBody(r *http.Request) (io.ReadCloser, io.ReadCloser, error) {
 		return nil, nil, err
 	}
 	return io.NopCloser(bytes.NewReader(b)), io.NopCloser(bytes.NewReader(b)), nil
+}
+
+// teeBody duplicates the request body across two readers via pipes,
+// streaming without buffering the full content.
+func teeBody(r *http.Request) (io.ReadCloser, io.ReadCloser, error) {
+	if r.Body == nil || r.Body == http.NoBody {
+		return http.NoBody, http.NoBody, nil
+	}
+	pr1, pw1 := io.Pipe()
+	pr2, pw2 := io.Pipe()
+	mw := io.MultiWriter(pw1, pw2)
+	go func() {
+		defer r.Body.Close()
+		if _, err := io.Copy(mw, r.Body); err != nil {
+			pw1.CloseWithError(err)
+			pw2.CloseWithError(err)
+		} else {
+			pw1.Close()
+			pw2.Close()
+		}
+	}()
+	return pr1, pr2, nil
 }
 
 // s3op maps (method, path, query) → canonical S3 operation string.
