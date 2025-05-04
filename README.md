@@ -94,8 +94,7 @@ go test ./...
 ## ✦ Roadmap
 
 * Streaming body handling for multi-GB uploads (`io.TeeReader → temp file`).
-* Metrics hooks integration.
-* Optional third endpoint ("tertiary") support.
+* Support external request customizers to adjust request/response behavior for non-standard S3-compatible providers(MinIO, Wasabi, R2...).
 
 ## ✦ License
 
