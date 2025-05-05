@@ -91,10 +91,37 @@ Routing decisions are optimized using O(1) map lookups.
 go test ./...
 ```
 
+## ✦ Example Customizer
+
+To handle provider-specific quirks, you can implement the `Customizer` interface. We provide a ready-made example for MinIO in `contrib/minio_customizer.go`.
+
+```go
+import (
+  "net/http"
+  "github.com/wilbeibi/s3router/contrib"
+)
+
+type MyCustomizer struct{}
+
+func (MyCustomizer) Before(req *http.Request, op, ep string, rule s3router.Rule) {
+  // modify req.Header or req.URL here
+}
+
+func (MyCustomizer) After(resp *http.Response, op, ep string, rule s3router.Rule) error {
+  // inspect or modify resp here
+  return nil
+}
+
+// primary is MinIO, secondary is another storage need some customizations.
+s3router.RegisterCustomizer("primary", contrib.MinioCustomizer{})
+s3router.RegisterCustomizer("secondary", MyCustomizer{})
+```
+
 ## ✦ Roadmap
 
-* Streaming body handling for multi-GB uploads (`io.TeeReader → temp file`).
-* Support external request customizers to adjust request/response behavior for non-standard S3-compatible providers(MinIO, Wasabi, R2...).
+- [x] Streaming body handling for multi-GB uploads.
+- [x] Support external request customizers to adjust request/response behavior for non-standard S3-compatible providers(MinIO, Wasabi, R2...).
+
 
 ## ✦ License
 

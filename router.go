@@ -44,34 +44,22 @@ func (rt *ruleRT) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	rule, action, found := rt.lookupAction(bucket, key, op)
 	if !found {
-		// no rule -> primary
-		// Apply potential alias for wildcard bucket if needed (unlikely but safe)
-		wildcardRule, _, wildcardFound := rt.lookupAction("*", key, op)
-		if wildcardFound {
-			applyAlias(req, wildcardRule, "primary")
-		}
-		return rt.tPrimary.RoundTrip(rewrite(req, rt.endpoints["primary"]))
+		// no rule -> primary (apply wildcard alias if any) and invoke hooks
+		wildcardRule, _, _ := rt.lookupAction("*", key, op)
+		return rt.sendOnce("primary", wildcardRule, req, nil)
 	}
 
 	switch action {
 	case actPrimary:
-		applyAlias(req, rule, "primary")
-		return rt.tPrimary.RoundTrip(rewrite(req, rt.endpoints["primary"]))
-
+		return rt.sendOnce("primary", rule, req, nil)
 	case actSecondary:
-		secEpName := "secondary"
-		applyAlias(req, rule, secEpName)
-		return rt.tPrimary.RoundTrip(rewrite(req, rt.endpoints[secEpName]))
-
+		return rt.sendOnce("secondary", rule, req, nil)
 	case actFallback:
 		return rt.doFallback(req, rule)
-
 	case actBestEffort:
 		return rt.doDual(req, rule, false)
-
 	case actMirror:
 		return rt.doDual(req, rule, true)
-
 	default:
 		return nil, fmt.Errorf("internal error: unknown action %q from lookup", action)
 	}
@@ -133,11 +121,8 @@ func applyAlias(r *http.Request, rule Rule, ep string) {
 func (rt *ruleRT) doFallback(src *http.Request, rule Rule) (*http.Response, error) {
 	secEpName := "secondary"
 
-	// Attempt 1: Primary
-	req1 := clone(src, nil)
-	req1 = rewrite(req1, rt.endpoints["primary"])
-	applyAlias(req1, rule, "primary")
-	resp, err := rt.tPrimary.RoundTrip(req1)
+	// Attempt 1: Primary with hooks
+	resp, err := rt.sendOnce("primary", rule, src, nil)
 
 	if err == nil && resp.StatusCode < 400 {
 		return resp, nil
@@ -146,17 +131,12 @@ func (rt *ruleRT) doFallback(src *http.Request, rule Rule) (*http.Response, erro
 		resp.Body.Close()
 	}
 
-	// Attempt 2: Secondary
-	req2 := clone(src, nil)
-	req2 = rewrite(req2, rt.endpoints[secEpName])
-	applyAlias(req2, rule, secEpName)
-	return rt.tPrimary.RoundTrip(req2)
+	// Attempt 2: Secondary with hooks
+	return rt.sendOnce(secEpName, rule, src, nil)
 }
 
 func (rt *ruleRT) doDual(src *http.Request, rule Rule, strong bool) (*http.Response, error) {
 	secEpName := "secondary"
-	p1 := rt.endpoints["primary"]
-	p2 := rt.endpoints[secEpName]
 
 	// choose streaming for large bodies (>1GB), else buffer in memory
 	var b1, b2 io.ReadCloser
@@ -170,17 +150,16 @@ func (rt *ruleRT) doDual(src *http.Request, rule Rule, strong bool) (*http.Respo
 		return nil, err
 	}
 
-	req1 := clone(src, b1)
-	req1 = rewrite(req1, p1)
-	applyAlias(req1, rule, "primary")
-
-	req2 := clone(src, b2)
-	req2 = rewrite(req2, p2)
-	applyAlias(req2, rule, secEpName)
-
+	// Dispatch both requests with hooks concurrently
 	c := make(chan result, 2)
-	go send(rt.tPrimary, req1, c)
-	go send(rt.tPrimary, req2, c)
+	go func() {
+		resp, err := rt.sendOnce("primary", rule, src, b1)
+		c <- result{resp, err}
+	}()
+	go func() {
+		resp, err := rt.sendOnce(secEpName, rule, src, b2)
+		c <- result{resp, err}
+	}()
 
 	resA := <-c
 	resB := <-c
@@ -335,4 +314,22 @@ func parseS3Path(r *http.Request) (bucket, key string) {
 		}
 	}
 	return bucket, key
+}
+
+// sendOnce executes a single request leg to the specified endpoint with optional hooks.
+// dstEp is the endpoint name ("primary"/"secondary"), src is the original request, body overrides the request body (nil to use default).
+func (rt *ruleRT) sendOnce(dstEp string, rule Rule, src *http.Request, body io.ReadCloser) (*http.Response, error) {
+	op := s3op(src)
+	c := customizers[dstEp]
+	req := clone(src, body)
+	req = rewrite(req, rt.endpoints[dstEp])
+	applyAlias(req, rule, dstEp)
+	if c != nil {
+		c.Before(req, op, dstEp, rule)
+	}
+	resp, err := rt.tPrimary.RoundTrip(req)
+	if err == nil && c != nil {
+		err = c.After(resp, op, dstEp, rule)
+	}
+	return resp, err
 }
