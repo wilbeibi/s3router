@@ -23,20 +23,29 @@ go get github.com/wilbeibi/s3router
 ## ✦ Quick Start Example
 
 ```go
-cfg, _ := s3router.LoadConfig("router.yaml") // Load & validate configuration
-rt,  _ := s3router.New(cfg)                  // Compile router
-client := &http.Client{Transport: rt}        // Integrate with standard HTTP clients
+// Load and compile routing config
+cfg, _ := s3router.LoadConfig("router.yaml")
 
-// AWS SDK v2 Example
-awsCfg, _ := config.LoadDefaultConfig(context.TODO(),
-    config.WithHTTPClient(client),
-)
-s3Client := s3.NewFromConfig(awsCfg)
+// For a single AWS key pair:
+rt, _ := s3router.New(cfg)
 
-_, err := s3Client.PutObject(ctx, &s3.PutObjectInput{
-    Bucket: aws.String("s3photos"),
-    Key:    aws.String("raw/cat.jpg"),
-    Body:   bytes.NewReader(img),
+// Or, to use different creds per endpoint:
+creds := map[string]aws.CredentialsProvider{
+  "primary":   aws.NewStaticCredentialsProvider("AK1","SK1",""),
+  "secondary": aws.NewStaticCredentialsProvider("AK2","SK2",""),
+}
+rt, _ = s3router.NewWithAWSCreds(cfg, creds, "us-west-1")
+
+// Use the router in your HTTP client
+client := &http.Client{Transport: rt}
+
+// AWS SDK v2
+awsCfg, _ := config.LoadDefaultConfig(context.TODO(), config.WithHTTPClient(client))
+svc := s3.NewFromConfig(awsCfg)
+_, _ = svc.PutObject(context.TODO(), &s3.PutObjectInput{
+  Bucket: aws.String("s3photos"),
+  Key:    aws.String("raw/cat.jpg"),
+  Body:   bytes.NewReader([]byte("data")),
 })
 ```
 
@@ -121,7 +130,6 @@ s3router.RegisterCustomizer("secondary", MyCustomizer{})
 
 - [x] Streaming body handling for multi-GB uploads.
 - [x] Support external request customizers to adjust request/response behavior for non-standard S3-compatible providers(MinIO, Wasabi, R2...).
-
 
 ## ✦ License
 
