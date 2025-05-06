@@ -1,27 +1,10 @@
 package s3router
 
 import (
-	"os"
 	"reflect"
 	"strings"
 	"testing"
 )
-
-func createTempConfigFile(t *testing.T, content string) (string, func()) {
-	t.Helper()
-	tmpFile, err := os.CreateTemp(t.TempDir(), "config-*.yaml")
-	if err != nil {
-		t.Fatalf("Failed to create temp file: %v", err)
-	}
-	if _, err := tmpFile.WriteString(content); err != nil {
-		tmpFile.Close()
-		t.Fatalf("Failed to write to temp file: %v", err)
-	}
-	if err := tmpFile.Close(); err != nil {
-		t.Fatalf("Failed to close temp file: %v", err)
-	}
-	return tmpFile.Name(), func() {}
-}
 
 func TestLoadConfig(t *testing.T) {
 	tests := []struct {
@@ -105,10 +88,7 @@ rules:
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			configPath, cleanup := createTempConfigFile(t, tc.yaml)
-			defer cleanup()
-
-			got, err := LoadConfig(configPath)
+			got, err := LoadConfig(strings.NewReader(tc.yaml))
 
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {

@@ -10,13 +10,24 @@ import (
 	"strings"
 )
 
-func New(cfg *Config) (http.RoundTripper, error) {
-	rt := &ruleRT{
-		cfg:       cfg,
-		endpoints: map[string]*url.URL{},
-		tPrimary:  http.DefaultTransport,
+type Option func(*ruleRT)
+
+func WithMaxBufferBytes(n int64) Option {
+	return func(rt *ruleRT) {
+		rt.maxBufferBytes = n
 	}
-	// parse endpoint URLs once
+}
+
+func New(cfg *Config, opts ...Option) (http.RoundTripper, error) {
+	rt := &ruleRT{
+		cfg:            cfg,
+		endpoints:      map[string]*url.URL{},
+		tPrimary:       http.DefaultTransport,
+		maxBufferBytes: 256 << 20, // default 256 MiB
+	}
+	for _, o := range opts {
+		o(rt)
+	}
 	for name, raw := range cfg.Endpoints {
 		u, err := url.Parse(raw)
 		if err != nil {
@@ -24,18 +35,14 @@ func New(cfg *Config) (http.RoundTripper, error) {
 		}
 		rt.endpoints[name] = u
 	}
-	// No need for rt.sorted anymore
 	return rt, nil
 }
 
-// --------------------------------------------------------------------
-// Transport
-// --------------------------------------------------------------------
-
 type ruleRT struct {
-	cfg       *Config
-	endpoints map[string]*url.URL
-	tPrimary  http.RoundTripper
+	cfg            *Config
+	endpoints      map[string]*url.URL
+	tPrimary       http.RoundTripper
+	maxBufferBytes int64 // threshold for in-memory buffering vs streaming
 }
 
 func (rt *ruleRT) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -64,10 +71,6 @@ func (rt *ruleRT) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("internal error: unknown action %q from lookup", action)
 	}
 }
-
-// --------------------------------------------------------------------
-// Routing lookup
-// --------------------------------------------------------------------
 
 // lookupAction finds the best matching rule and the effective action for the request.
 func (rt *ruleRT) lookupAction(bucket, key, op string) (Rule, action, bool) {
@@ -114,10 +117,6 @@ func applyAlias(r *http.Request, rule Rule, ep string) {
 	}
 }
 
-// --------------------------------------------------------------------
-// Action handlers
-// --------------------------------------------------------------------
-
 func (rt *ruleRT) doFallback(src *http.Request, rule Rule) (*http.Response, error) {
 	secEpName := "secondary"
 
@@ -138,10 +137,10 @@ func (rt *ruleRT) doFallback(src *http.Request, rule Rule) (*http.Response, erro
 func (rt *ruleRT) doDual(src *http.Request, rule Rule, strong bool) (*http.Response, error) {
 	secEpName := "secondary"
 
-	// choose streaming for large bodies (>1GB), else buffer in memory
+	// choose streaming for large bodies (>maxBufferBytes), else buffer in memory
 	var b1, b2 io.ReadCloser
 	var err error
-	if src.ContentLength > (1 << 30) {
+	if src.ContentLength > rt.maxBufferBytes {
 		b1, b2, err = teeBody(src)
 	} else {
 		b1, b2, err = drainBody(src)
@@ -297,7 +296,7 @@ func s3op(r *http.Request) string {
 }
 
 func parseS3Path(r *http.Request) (bucket, key string) {
-	// --- path‑style:  /bucket/key/…  --------------------------------
+	// path‑style:  /bucket/key/…
 	p := strings.TrimPrefix(r.URL.EscapedPath(), "/")
 	if p != "" {
 		if parts := strings.SplitN(p, "/", 2); len(parts) > 0 {
@@ -307,7 +306,7 @@ func parseS3Path(r *http.Request) (bucket, key string) {
 			}
 		}
 	}
-	// --- virtual‑host style:  bucket.s3.amazonaws.com/…  ------------
+	// virtual‑host style:  bucket.s3.amazonaws.com/…
 	if bucket == "" {
 		if host := r.URL.Hostname(); host != "" {
 			bucket = strings.Split(host, ".")[0] // first label

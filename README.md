@@ -24,7 +24,9 @@ go get github.com/wilbeibi/s3router
 
 ```go
 // Load and compile routing config
-cfg, _ := s3router.LoadConfig("router.yaml")
+f, _ := os.Open("router.yaml")
+defer f.Close()
+cfg, _ := s3router.LoadConfig(f) 
 
 // For a single AWS key pair:
 rt, _ := s3router.New(cfg)
@@ -36,10 +38,8 @@ creds := map[string]aws.CredentialsProvider{
 }
 rt, _ = s3router.NewWithAWSCreds(cfg, creds, "us-west-1")
 
-// Use the router in your HTTP client
 client := &http.Client{Transport: rt}
 
-// AWS SDK v2
 awsCfg, _ := config.LoadDefaultConfig(context.TODO(), config.WithHTTPClient(client))
 svc := s3.NewFromConfig(awsCfg)
 _, _ = svc.PutObject(context.TODO(), &s3.PutObjectInput{

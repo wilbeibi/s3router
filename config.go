@@ -2,7 +2,7 @@ package s3router
 
 import (
 	"fmt"
-	"os"
+	"io"
 	"sort"
 	"strings"
 
@@ -53,8 +53,9 @@ type Config struct {
 
 // ---------------- Loader + validation -------------------------------------
 
-func LoadConfig(path string) (*Config, error) {
-	raw, err := os.ReadFile(path)
+// LoadConfig reads configuration from the given reader and returns a compiled Config.
+func LoadConfig(r io.Reader) (*Config, error) {
+	raw, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
 	}
