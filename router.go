@@ -320,6 +320,7 @@ func parseS3Path(r *http.Request) (bucket, key string) {
 // dstEp is the endpoint name ("primary"/"secondary"), src is the original request, body overrides the request body (nil to use default).
 func (rt *ruleRT) sendOnce(dstEp string, rule Rule, src *http.Request, body io.ReadCloser) (*http.Response, error) {
 	op := s3op(src)
+	// retrieve the customizer (single or composite)
 	c := customizers[dstEp]
 	req := clone(src, body)
 	req = rewrite(req, rt.endpoints[dstEp])
