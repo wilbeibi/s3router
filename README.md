@@ -1,5 +1,8 @@
 # s3router
 
+ ⚠️ **WARNING: This project is not production-ready. Major refactoring in progress.**
+
+
 `s3router` is a lightweight `http.RoundTripper` that routes S3-compatible HTTP traffic between two storage endpoints (`primary` & `secondary`) using a simple YAML configuration.
 
 Designed for robust and flexible cloud storage scenarios, it supports:
