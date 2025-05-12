@@ -40,9 +40,9 @@ rules:
         "*": primary # only send to primary
 `,
 			want: &Config{
-				Endpoints: map[string]string{
-					"primary":   "http://primary:9000",
-					"secondary": "http://secondary:9000",
+				Endpoints: map[Endpoint]string{
+					EndpointPrimary:   "http://primary:9000",
+					EndpointSecondary: "http://secondary:9000",
 				},
 				Buckets: map[string]BucketMapping{
 					"photos": {

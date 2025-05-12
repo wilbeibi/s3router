@@ -27,14 +27,18 @@ type yamlConfig struct {
 
 // ---------------- Compiled config -----------------------------------------
 
-type Action string // Exported Action type
+type Action string
+type Endpoint string
 
 const (
-	ActPrimary    Action = "primary" // Exported constants
+	ActPrimary    Action = "primary"
 	ActSecondary  Action = "secondary"
 	ActFallback   Action = "fallback"
 	ActMirror     Action = "mirror"
 	ActBestEffort Action = "best-effort"
+
+	EndpointPrimary   Endpoint = "primary"
+	EndpointSecondary Endpoint = "secondary"
 )
 
 // Rule defines a routing rule for a specific bucket/prefix combination.
@@ -46,12 +50,10 @@ type Rule struct {
 
 // Config is the compiled configuration for the S3 router.
 type Config struct {
-	Endpoints map[string]string        `yaml:"endpoints"`
+	Endpoints map[Endpoint]string      `yaml:"endpoints"`
 	Buckets   map[string]BucketMapping `yaml:"buckets"`
-	Rules     []Rule                   `yaml:"rules"` // Sorted by Bucket, then longest Prefix first
+	Rules     []Rule                   `yaml:"rules"`
 }
-
-// ---------------- Loader + validation -------------------------------------
 
 // Load reads configuration from the given reader and returns a compiled Config.
 func Load(r io.Reader) (*Config, error) {
@@ -61,14 +63,16 @@ func Load(r io.Reader) (*Config, error) {
 		return nil, err
 	}
 
-	// Transform yamlConfig into Config
+	endpoints := make(map[Endpoint]string, len(yml.Endpoints))
+	for k, v := range yml.Endpoints {
+		endpoints[Endpoint(k)] = v
+	}
 	cfg := &Config{
-		Endpoints: yml.Endpoints,
+		Endpoints: endpoints,
 		Buckets:   yml.Buckets,
 		Rules:     make([]Rule, 0, len(yml.Rules)),
 	}
 
-	// Transform each yamlRule into multiple Rules (one per prefix)
 	for _, yr := range yml.Rules {
 		for prefix, actions := range yr.Prefix {
 			// Convert "*" prefix to empty string for root
@@ -89,7 +93,6 @@ func Load(r io.Reader) (*Config, error) {
 		}
 	}
 
-	// Validate default operation
 	for _, rule := range cfg.Rules {
 		if _, ok := rule.Actions["*"]; !ok {
 			return nil, fmt.Errorf("missing default \"*\" operation")
@@ -112,55 +115,31 @@ func Load(r io.Reader) (*Config, error) {
 // Lookup finds the best matching rule and action for a given bucket, key, and operation.
 // If no matching rule is found, defaults to primary.
 func (cfg *Config) Lookup(bucket, key, op string) (Rule, Action) {
-	fmt.Printf("[debug] Looking up rule for bucket=%s, key=%s, op=%s\n", bucket, key, op)
 	for _, rule := range cfg.Rules {
-		fmt.Printf("[debug] Checking rule: bucket=%s, prefix=%s, actions=%v\n", rule.Bucket, rule.Prefix, rule.Actions)
 		if rule.Bucket != bucket && rule.Bucket != "*" {
-			fmt.Printf("[debug] Bucket mismatch, skipping rule\n")
 			continue
 		}
 		if rule.Prefix != "" && !strings.HasPrefix(key, rule.Prefix) {
-			fmt.Printf("[debug] Prefix mismatch, skipping rule\n")
 			continue
 		}
 		if act, ok := rule.Actions[op]; ok {
-			fmt.Printf("[debug] Found exact operation match: %s\n", act)
 			return rule, act
 		}
-		fmt.Printf("[debug] Using wildcard operation: %s\n", rule.Actions["*"])
 		return rule, rule.Actions["*"]
 	}
-	fmt.Printf("[debug] No matching rule found, defaulting to primary\n")
 	return Rule{}, ActPrimary
-}
-
-// GetPhysicalBucket returns the physical bucket name for the given logical bucket and endpoint.
-// If no mapping is found, returns the input bucket name.
-func (cfg *Config) GetPhysicalBucket(logicalBucket, endpoint string) string {
-	if mapping, ok := cfg.Buckets[logicalBucket]; ok {
-		switch endpoint {
-		case "primary":
-			return mapping.Primary
-		case "secondary":
-			return mapping.Secondary
-		}
-	}
-	return logicalBucket
-}
-
-// GetLogicalBucket returns the logical bucket name for the given physical bucket name.
-// If no mapping is found, returns the input bucket name.
-func (cfg *Config) GetLogicalBucket(physicalBucket string) string {
-	for name, mapping := range cfg.Buckets {
-		if mapping.Primary == physicalBucket || mapping.Secondary == physicalBucket {
-			return name
-		}
-	}
-	return physicalBucket
 }
 
 // IsLogicalBucket returns true if the given bucket name is a logical bucket defined in the configuration.
 func (cfg *Config) IsLogicalBucket(bucket string) bool {
 	_, ok := cfg.Buckets[bucket]
 	return ok
+}
+
+// PhysicalBuckets returns the primary and secondary physical bucket names for the given logical bucket.
+func (cfg *Config) PhysicalBuckets(logical string) (string, string) {
+	if m, ok := cfg.Buckets[logical]; ok {
+		return m.Primary, m.Secondary
+	}
+	return logical, logical
 }

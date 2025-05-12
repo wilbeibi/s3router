@@ -23,56 +23,59 @@ go get github.com/wilbeibi/s3router
 ## ✦ Quick Start Example
 
 ```go
-// Load and compile routing config
-f, _ := os.Open("router.yaml")
-defer f.Close()
-cfg, _ := s3router.LoadConfig(f) 
+	f, _ := os.Open("router.yaml")
+	defer f.Close()
+	routerCfg, _ := config.Load(f)
 
-// For a single AWS key pair:
-rt, _ := s3router.New(cfg)
+	primaryClient := s3.NewFromConfig(s3Cfg)
+	secondaryClient := s3.NewFromConfig(r2Cfg)
 
-// Or, to use different creds per endpoint:
-creds := map[string]aws.CredentialsProvider{
-  "primary":   credentials.NewStaticCredentialsProvider("AK1","SK1",""),
-  "secondary": credentials.NewStaticCredentialsProvider("AK2","SK2",""),
-}
-rt, _ = s3router.NewWithAWSCreds(cfg, creds, "us-west-1")
+	routerClient, _ := s3router.New(routerCfg, primaryClient, secondaryClient)
 
-client := &http.Client{Transport: rt}
+	_, _ = routerClient.PutObject(context.TODO(), &s3.PutObjectInput{
+		Bucket: aws.String("s3photos"),
+		Key:    aws.String("raw/cat.jpg"),
+		Body:   bytes.NewReader([]byte("hello, world")),
+	})
 
-awsCfg, _ := config.LoadDefaultConfig(context.TODO(), config.WithHTTPClient(client))
-svc := s3.NewFromConfig(awsCfg)
-_, _ = svc.PutObject(context.TODO(), &s3.PutObjectInput{
-  Bucket: aws.String("s3photos"),
-  Key:    aws.String("raw/cat.jpg"),
-  Body:   bytes.NewReader([]byte("data")),
-})
+
 ```
 
 ## ✦ Example Configuration (`router.yaml`)
 
 ```yaml
+# define the two HTTP endpoints you'll talk to
 endpoints:
-  primary: https://s3.us-west-1.amazonaws.com
+  primary:   https://s3.us-west-1.amazonaws.com
   secondary: https://r2.cloudflarestorage.com
 
+# map your logical buckets → physical buckets on each endpoint
+buckets:
+  s3photos:
+    primary:   s3photos
+    secondary:  r2photos
+  logs:
+    primary:   logs
+    secondary: logs-backup
+
+# routing rules per logical bucket / prefix / operation
 rules:
-  - bucket: s3photos@primary:r2photos@secondary
+  - bucket: s3photos
     prefix:
       "raw/":
-        PutObject: mirror         # Both copies must succeed
-        DeleteObject: best-effort # Ignore secondary errors
-        GetObject: fallback       # Read fallback
-        "*": fallback             # Default fallback
+        PutObject: mirror       # both writes must succeed
+        DeleteObject: best-effort  # ignore secondary errors
+        GetObject: fallback     # fallback‐on‐error reads
+        "*": fallback           # default fallback for other ops
       "processed/":
-        "*": secondary            # Secondary only
+        "*": secondary          # always read/write secondary
       "*":
-        "*": primary              # Default to primary
+        "*": primary            # everything else → primary
 
   - bucket: logs
     prefix:
       "*":
-        "*": fallback             # Always fallback
+        "*": fallback           # always fallback reads for logs
 ```
 
 ## ✦ Routing Keywords Reference
@@ -100,37 +103,8 @@ Routing decisions are optimized using O(1) map lookups.
 go test ./...
 ```
 
-## ✦ Example Customizer
-
-To handle provider-specific quirks, you can implement the `Customizer` interface. We provide a ready-made example for MinIO in `contrib/minio_customizer.go`.
-
-```go
-import (
-  "net/http"
-  "github.com/wilbeibi/s3router/contrib"
-)
-
-type MyCustomizer struct{}
-
-func (MyCustomizer) Before(req *http.Request, op, ep string, rule s3router.Rule) {
-  // modify req.Header or req.URL here
-}
-
-func (MyCustomizer) After(resp *http.Response, op, ep string, rule s3router.Rule) error {
-  // inspect or modify resp here
-  return nil
-}
-
-// primary is MinIO, secondary is another storage need some customizations.
-s3router.RegisterCustomizer("primary", contrib.MinioCustomizer{})
-s3router.RegisterCustomizer("secondary", MyCustomizer{})
-```
-
 ## ✦ Roadmap
 
 - [x] Streaming body handling for multi-GB uploads.
-- [x] Support external request customizers to adjust request/response behavior for non-standard S3-compatible providers(MinIO, Wasabi, R2...).
+- [ ] Support external request customizers to adjust request/response behavior for non-standard S3-compatible providers(MinIO, Wasabi, R2...).
 
-## ✦ License
-
-MIT — see [LICENSE](LICENSE).

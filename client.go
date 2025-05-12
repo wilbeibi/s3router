@@ -22,7 +22,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/wilbeibi/s3router/config"
 )
@@ -32,10 +31,12 @@ type Client interface {
 		optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	PutObject(ctx context.Context, in *s3.PutObjectInput,
 		optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
-	//HeadObject(ctx context.Context, in *s3.HeadObjectInput,
-	//	optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
-	//DeleteObject(ctx context.Context, in *s3.DeleteObjectInput,
-	//	optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	HeadObject(ctx context.Context, in *s3.HeadObjectInput,
+		optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+	DeleteObject(ctx context.Context, in *s3.DeleteObjectInput,
+		optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input,
+		optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 	//CreateMultipartUpload(ctx context.Context, in *s3.CreateMultipartUploadInput,
 	//	optFns ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error)
 	//UploadPart(ctx context.Context, in *s3.UploadPartInput,
@@ -46,8 +47,7 @@ type Client interface {
 	//	optFns ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
 	//CopyObject(ctx context.Context, in *s3.CopyObjectInput,
 	//	optFns ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
-	//ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input,
-	//	optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
+
 }
 
 // Option configures the client.
@@ -83,41 +83,26 @@ type client struct {
 	maxBufferBytes int64 // 256 MiB default
 }
 
-func (c *client) GetObject(
-	ctx context.Context,
-	in *s3.GetObjectInput,
-	optFns ...func(*s3.Options),
-) (*s3.GetObjectOutput, error) {
-	const op = "GetObject"
-	bucket, key := aws.ToString(in.Bucket), aws.ToString(in.Key)
-	_, action := c.cfg.Lookup(bucket, key, op)
-	return dispatch(ctx, action,
-		func(ctx context.Context, cl *s3.Client) (*s3.GetObjectOutput, error) {
-			return cl.GetObject(ctx, in, optFns...)
-		},
-		func(ctx context.Context, cl *s3.Client) (*s3.GetObjectOutput, error) {
-			return cl.GetObject(ctx, in, optFns...)
-		}, c.primary, c.secondary)
-}
-
 // Serial "primary-then-secondary if needed" (fallback).
-func doSerial[T any](
+func doSerial[I any, T any](
 	ctx context.Context,
-	first, second func(context.Context, *s3.Client) (T, error),
+	op func(context.Context, *s3.Client, I) (T, error),
+	in1, in2 I,
 	c1, c2 *s3.Client,
 ) (T, error) {
-	out, err := first(ctx, c1)
+	out, err := op(ctx, c1, in1)
 	if err == nil {
 		return out, nil
 	}
-	return second(ctx, c2)
+	return op(ctx, c2, in2)
 }
 
 // Parallel dual-write/read. strict==true => mirror; false => best-effort.
-func doParallel[T any](
+func doParallel[I any, T any](
 	ctx context.Context,
 	strict bool,
-	a, b func(context.Context, *s3.Client) (T, error),
+	op func(context.Context, *s3.Client, I) (T, error),
+	in1, in2 I,
 	c1, c2 *s3.Client,
 ) (T, error) {
 	if strict {
@@ -127,11 +112,11 @@ func doParallel[T any](
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			out, errA = a(ctx, c1)
+			out, errA = op(ctx, c1, in1)
 		}()
 		go func() {
 			defer wg.Done()
-			_, errB = b(ctx, c2)
+			_, errB = op(ctx, c2, in2)
 		}()
 		wg.Wait()
 		if errA != nil {
@@ -145,9 +130,9 @@ func doParallel[T any](
 		return out, nil
 	}
 	// best-effort: fire-and-forget secondary
-	out, err := a(ctx, c1)
+	out, err := op(ctx, c1, in1)
 	go func() {
-		_, _ = b(ctx, c2)
+		_, _ = op(ctx, c2, in2)
 	}()
 	return out, err
 }
@@ -189,26 +174,27 @@ func teeBody(ctx context.Context, r io.Reader) (io.ReadCloser, io.ReadCloser, er
 }
 
 // dispatch executes the primary and secondary functions according to action.
-func dispatch[T any](
+func dispatch[I any, T any](
 	ctx context.Context,
 	action config.Action,
-	primaryFn, secondaryFn func(context.Context, *s3.Client) (T, error),
+	op func(context.Context, *s3.Client, I) (T, error),
+	primaryInput, secondaryInput I,
 	c1, c2 *s3.Client,
 ) (T, error) {
 	switch action {
 	case config.ActPrimary:
-		return primaryFn(ctx, c1)
+		return op(ctx, c1, primaryInput)
 	case config.ActSecondary:
-		return secondaryFn(ctx, c2)
+		return op(ctx, c2, secondaryInput)
 	case config.ActFallback:
-		return doSerial(ctx, primaryFn, secondaryFn, c1, c2)
+		return doSerial(ctx, op, primaryInput, secondaryInput, c1, c2)
 	case config.ActBestEffort:
-		return doParallel(ctx, false, primaryFn, secondaryFn, c1, c2)
+		return doParallel(ctx, false, op, primaryInput, secondaryInput, c1, c2)
 	case config.ActMirror:
-		return doParallel(ctx, true, primaryFn, secondaryFn, c1, c2)
+		return doParallel(ctx, true, op, primaryInput, secondaryInput, c1, c2)
 	default:
 		// Fall back to primary if action is unknown
-		return primaryFn(ctx, c1)
+		return op(ctx, c1, primaryInput)
 	}
 	// TODO: a customizer After() to tweak output based on endpoint?
 }
