@@ -14,12 +14,11 @@ flowchart TD
     secondaryFn -->|5| secondarySDK[s3.Client.GetObject]
 */
 
-package router
+package s3router
 
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"sync"
 
@@ -28,12 +27,27 @@ import (
 	"github.com/wilbeibi/s3router/config"
 )
 
-type Client interface { // facade exposed to user code
+type Client interface {
 	GetObject(ctx context.Context, in *s3.GetObjectInput,
 		optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
 	PutObject(ctx context.Context, in *s3.PutObjectInput,
 		optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
-	// …more ops you care about
+	//HeadObject(ctx context.Context, in *s3.HeadObjectInput,
+	//	optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+	//DeleteObject(ctx context.Context, in *s3.DeleteObjectInput,
+	//	optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
+	//CreateMultipartUpload(ctx context.Context, in *s3.CreateMultipartUploadInput,
+	//	optFns ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error)
+	//UploadPart(ctx context.Context, in *s3.UploadPartInput,
+	//	optFns ...func(*s3.Options)) (*s3.UploadPartOutput, error)
+	//CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMultipartUploadInput,
+	//	optFns ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error)
+	//AbortMultipartUpload(ctx context.Context, in *s3.AbortMultipartUploadInput,
+	//	optFns ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
+	//CopyObject(ctx context.Context, in *s3.CopyObjectInput,
+	//	optFns ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
+	//ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input,
+	//	optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
 
 // Option configures the client.
@@ -174,49 +188,6 @@ func teeBody(ctx context.Context, r io.Reader) (io.ReadCloser, io.ReadCloser, er
 	return pr1, pr2, nil
 }
 
-func (c *client) PutObject(ctx context.Context, in *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	const op = "PutObject"
-	bucket, key := aws.ToString(in.Bucket), aws.ToString(in.Key)
-	_, action := c.cfg.Lookup(bucket, key, op)
-	fmt.Println("action", action)
-
-	var primaryFn, secondaryFn func(context.Context, *s3.Client) (*s3.PutObjectOutput, error)
-
-	if action == config.ActMirror && in.Body != nil {
-		in1 := *in
-		in2 := *in
-		var r1, r2 io.Reader
-		var err error
-		if in.ContentLength != nil && *in.ContentLength < c.maxBufferBytes {
-			r1, r2, err = drainBody(ctx, in.Body)
-			if err != nil {
-				return nil, fmt.Errorf("failed to drain request body: %w", err)
-			}
-		} else {
-			r1, r2, err = teeBody(ctx, in.Body)
-			if err != nil {
-				return nil, fmt.Errorf("failed to split request body: %w", err)
-			}
-		}
-		in1.Body = r1
-		in2.Body = r2
-
-		primaryFn = func(ctx context.Context, cl *s3.Client) (*s3.PutObjectOutput, error) {
-			return cl.PutObject(ctx, &in1, optFns...)
-		}
-		secondaryFn = func(ctx context.Context, cl *s3.Client) (*s3.PutObjectOutput, error) {
-			return cl.PutObject(ctx, &in2, optFns...)
-		}
-	} else {
-		primaryFn = func(ctx context.Context, cl *s3.Client) (*s3.PutObjectOutput, error) {
-			return cl.PutObject(ctx, in, optFns...)
-		}
-		secondaryFn = primaryFn
-	}
-
-	return dispatch(ctx, action, primaryFn, secondaryFn, c.primary, c.secondary)
-}
-
 // dispatch executes the primary and secondary functions according to action.
 func dispatch[T any](
 	ctx context.Context,
@@ -239,4 +210,5 @@ func dispatch[T any](
 		// Fall back to primary if action is unknown
 		return primaryFn(ctx, c1)
 	}
+	// TODO: a customizer After() to tweak output based on endpoint?
 }

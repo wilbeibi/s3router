@@ -6,12 +6,6 @@ buckets:
   photos:
     primary: photos
     secondary: cf-photos
-# Each op has 5 options:
-# - primary
-# - secondary
-# - fallback
-# - best-effort
-# - mirror
 
 rules:
   # map to 'photo' in primary and 'cf-photos' in secondary

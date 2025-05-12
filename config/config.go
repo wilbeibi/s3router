@@ -39,7 +39,7 @@ const (
 
 // Rule defines a routing rule for a specific bucket/prefix combination.
 type Rule struct {
-	Bucket  string            `yaml:"bucket"`
+	Bucket  string            `yaml:"bucket"`  // logical bucket name
 	Prefix  string            `yaml:"prefix"`  // Prefix within the bucket ("" means root)
 	Actions map[string]Action `yaml:"actions"` // op -> action (must contain "*")
 }
@@ -112,17 +112,55 @@ func Load(r io.Reader) (*Config, error) {
 // Lookup finds the best matching rule and action for a given bucket, key, and operation.
 // If no matching rule is found, defaults to primary.
 func (cfg *Config) Lookup(bucket, key, op string) (Rule, Action) {
+	fmt.Printf("[debug] Looking up rule for bucket=%s, key=%s, op=%s\n", bucket, key, op)
 	for _, rule := range cfg.Rules {
+		fmt.Printf("[debug] Checking rule: bucket=%s, prefix=%s, actions=%v\n", rule.Bucket, rule.Prefix, rule.Actions)
 		if rule.Bucket != bucket && rule.Bucket != "*" {
+			fmt.Printf("[debug] Bucket mismatch, skipping rule\n")
 			continue
 		}
 		if rule.Prefix != "" && !strings.HasPrefix(key, rule.Prefix) {
+			fmt.Printf("[debug] Prefix mismatch, skipping rule\n")
 			continue
 		}
 		if act, ok := rule.Actions[op]; ok {
+			fmt.Printf("[debug] Found exact operation match: %s\n", act)
 			return rule, act
 		}
+		fmt.Printf("[debug] Using wildcard operation: %s\n", rule.Actions["*"])
 		return rule, rule.Actions["*"]
 	}
+	fmt.Printf("[debug] No matching rule found, defaulting to primary\n")
 	return Rule{}, ActPrimary
+}
+
+// GetPhysicalBucket returns the physical bucket name for the given logical bucket and endpoint.
+// If no mapping is found, returns the input bucket name.
+func (cfg *Config) GetPhysicalBucket(logicalBucket, endpoint string) string {
+	if mapping, ok := cfg.Buckets[logicalBucket]; ok {
+		switch endpoint {
+		case "primary":
+			return mapping.Primary
+		case "secondary":
+			return mapping.Secondary
+		}
+	}
+	return logicalBucket
+}
+
+// GetLogicalBucket returns the logical bucket name for the given physical bucket name.
+// If no mapping is found, returns the input bucket name.
+func (cfg *Config) GetLogicalBucket(physicalBucket string) string {
+	for name, mapping := range cfg.Buckets {
+		if mapping.Primary == physicalBucket || mapping.Secondary == physicalBucket {
+			return name
+		}
+	}
+	return physicalBucket
+}
+
+// IsLogicalBucket returns true if the given bucket name is a logical bucket defined in the configuration.
+func (cfg *Config) IsLogicalBucket(bucket string) bool {
+	_, ok := cfg.Buckets[bucket]
+	return ok
 }
