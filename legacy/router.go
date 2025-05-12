@@ -46,21 +46,25 @@ type ruleRT struct {
 }
 
 func (rt *ruleRT) RoundTrip(req *http.Request) (*http.Response, error) {
+	fmt.Printf("[s3router]: req: %+v\n", req)
 	bucket, key := parseS3Path(req)
+	fmt.Printf("[s3router]: bucket: %s, key: %s\n", bucket, key)
 	op := s3op(req)
-
+	fmt.Printf("[s3router]: op: %s\n", op)
+	fmt.Printf("Loaded config: %+v\n", rt.cfg)
 	rule, action, found := rt.lookupAction(bucket, key, op)
+	fmt.Printf("[s3router]: rule: %+v, action: %s, found: %t\n", rule, action, found)
 	if !found {
 		// no rule -> primary (apply wildcard alias if any) and invoke hooks
 		wildcardRule, _, _ := rt.lookupAction("*", key, op)
-		return rt.sendOnce("primary", wildcardRule, req, nil)
+		return rt.sendOnce("primary", wildcardRule, req, req.Body)
 	}
 
 	switch action {
 	case actPrimary:
-		return rt.sendOnce("primary", rule, req, nil)
+		return rt.sendOnce("primary", rule, req, req.Body)
 	case actSecondary:
-		return rt.sendOnce("secondary", rule, req, nil)
+		return rt.sendOnce("secondary", rule, req, req.Body)
 	case actFallback:
 		return rt.doFallback(req, rule)
 	case actBestEffort:
@@ -120,18 +124,45 @@ func applyAlias(r *http.Request, rule Rule, ep string) {
 func (rt *ruleRT) doFallback(src *http.Request, rule Rule) (*http.Response, error) {
 	secEpName := "secondary"
 
-	// Attempt 1: Primary with hooks
-	resp, err := rt.sendOnce("primary", rule, src, nil)
+	var b1, b2 io.ReadCloser // b1 for primary, b2 for secondary
+	var err error
 
-	if err == nil && resp.StatusCode < 400 {
-		return resp, nil
+	if src.Body != nil && src.Body != http.NoBody {
+
+		if src.ContentLength > rt.maxBufferBytes {
+			b1, b2, err = teeBody(src) // src.Body will be consumed and closed by teeBody
+		} else {
+			b1, b2, err = drainBody(src) //
+		}
+		if err != nil {
+			return nil, fmt.Errorf("s3router: failed to prepare body for fallback: %w", err)
+		}
+	} else {
+		b1 = http.NoBody
+		b2 = http.NoBody
 	}
-	if resp != nil && resp.Body != nil {
-		resp.Body.Close()
+
+	// Attempt 1: Primary with hooks
+	respP, errP := rt.sendOnce("primary", rule, src, b1)
+
+	if errP == nil && respP.StatusCode < 400 {
+		if b2 != nil && b2 != http.NoBody {
+			io.Copy(io.Discard, b2)
+			b2.Close()
+		}
+		return respP, nil
+	}
+
+	// Primary attempt failed
+	if respP != nil && respP.Body != nil {
+		io.Copy(io.Discard, respP.Body)
+		respP.Body.Close()
 	}
 
 	// Attempt 2: Secondary with hooks
-	return rt.sendOnce(secEpName, rule, src, nil)
+	// b1 should have been consumed and closed by the RoundTrip in the first sendOnce.
+	// We pass b2 as the body for this attempt.
+	return rt.sendOnce(secEpName, rule, src, b2)
 }
 
 func (rt *ruleRT) doDual(src *http.Request, rule Rule, strong bool) (*http.Response, error) {
@@ -295,23 +326,16 @@ func s3op(r *http.Request) string {
 	return ""
 }
 
+// TODO: only support virtual-host style for now
 func parseS3Path(r *http.Request) (bucket, key string) {
-	// path‑style:  /bucket/key/…
-	p := strings.TrimPrefix(r.URL.EscapedPath(), "/")
-	if p != "" {
-		if parts := strings.SplitN(p, "/", 2); len(parts) > 0 {
-			bucket = parts[0]
-			if len(parts) == 2 {
-				key = parts[1]
-			}
-		}
+	if host := r.URL.Hostname(); host != "" {
+		bucket = strings.Split(host, ".")[0]
 	}
-	// virtual‑host style:  bucket.s3.amazonaws.com/…
-	if bucket == "" {
-		if host := r.URL.Hostname(); host != "" {
-			bucket = strings.Split(host, ".")[0] // first label
-		}
+
+	if r.URL.Path != "" && r.URL.Path != "/" {
+		key = strings.TrimPrefix(r.URL.Path, "/")
 	}
+
 	return bucket, key
 }
 
@@ -324,6 +348,10 @@ func (rt *ruleRT) sendOnce(dstEp string, rule Rule, src *http.Request, body io.R
 	req := clone(src, body)
 	req = rewrite(req, rt.endpoints[dstEp])
 	applyAlias(req, rule, dstEp)
+
+	// Add debug log for request
+	fmt.Printf("[s3router] Sending request: method=%s url=%s rule=%+v endpoint=%s\n", req.Method, req.URL.String(), rule, dstEp)
+
 	if c != nil {
 		c.Before(req, op, dstEp, rule)
 	}

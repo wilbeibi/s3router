@@ -2,6 +2,10 @@ endpoints:
   primary: https://s3.us‑west‑1.amazonaws.com
   secondary: https://r2.cloudflarestorage.com
 
+buckets:
+  photos:
+    primary: photos
+    secondary: cf-photos
 # Each op has 5 options:
 # - primary
 # - secondary
@@ -10,8 +14,8 @@ endpoints:
 # - mirror
 
 rules:
-  # bucket 'photo' in primary (s3) map to bucket 'cf-photos' in secondary (r2)
-  - bucket: photos@primary:cf-photos@secondary
+  # map to 'photo' in primary and 'cf-photos' in secondary
+  - bucket: photos
     prefix:
       "raw/":
         PutObject: mirror # primary & secondary must succeed

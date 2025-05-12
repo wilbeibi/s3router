@@ -33,8 +33,8 @@ rt, _ := s3router.New(cfg)
 
 // Or, to use different creds per endpoint:
 creds := map[string]aws.CredentialsProvider{
-  "primary":   aws.NewStaticCredentialsProvider("AK1","SK1",""),
-  "secondary": aws.NewStaticCredentialsProvider("AK2","SK2",""),
+  "primary":   credentials.NewStaticCredentialsProvider("AK1","SK1",""),
+  "secondary": credentials.NewStaticCredentialsProvider("AK2","SK2",""),
 }
 rt, _ = s3router.NewWithAWSCreds(cfg, creds, "us-west-1")
 
