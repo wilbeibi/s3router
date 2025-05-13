@@ -114,6 +114,25 @@ func (c *client) DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, opt
 	)
 }
 
+func (c *client) DeleteObjects(ctx context.Context, in *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
+	const op = "DeleteObjects"
+	bucket := aws.ToString(in.Bucket)
+	action, err := c.routeAction(op, bucket, "")
+	if err != nil {
+		return nil, err
+	}
+	primB, secB := c.cfg.PhysicalBuckets(bucket)
+	inPrimary, inSecondary := *in, *in
+	inPrimary.Bucket, inSecondary.Bucket = aws.String(primB), aws.String(secB)
+	return dispatch(ctx, action,
+		func(ctx context.Context, cl *s3.Client, in *s3.DeleteObjectsInput) (*s3.DeleteObjectsOutput, error) {
+			return cl.DeleteObjects(ctx, in, optFns...)
+		},
+		&inPrimary, &inSecondary,
+		c.primary, c.secondary,
+	)
+}
+
 func (c *client) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
 	const op = "ListObjectsV2"
 	bucket := aws.ToString(in.Bucket)

@@ -37,17 +37,16 @@ type Client interface {
 		optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error)
 	ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input,
 		optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
-	//CreateMultipartUpload(ctx context.Context, in *s3.CreateMultipartUploadInput,
-	//	optFns ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error)
-	//UploadPart(ctx context.Context, in *s3.UploadPartInput,
-	//	optFns ...func(*s3.Options)) (*s3.UploadPartOutput, error)
-	//CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMultipartUploadInput,
-	//	optFns ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error)
-	//AbortMultipartUpload(ctx context.Context, in *s3.AbortMultipartUploadInput,
-	//	optFns ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
-	//CopyObject(ctx context.Context, in *s3.CopyObjectInput,
-	//	optFns ...func(*s3.Options)) (*s3.CopyObjectOutput, error)
-
+	CreateMultipartUpload(ctx context.Context, in *s3.CreateMultipartUploadInput,
+		optFns ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error)
+	UploadPart(ctx context.Context, in *s3.UploadPartInput,
+		optFns ...func(*s3.Options)) (*s3.UploadPartOutput, error)
+	CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMultipartUploadInput,
+		optFns ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error)
+	ListParts(ctx context.Context, in *s3.ListPartsInput,
+		optFns ...func(*s3.Options)) (*s3.ListPartsOutput, error)
+	AbortMultipartUpload(ctx context.Context, in *s3.AbortMultipartUploadInput,
+		optFns ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
 }
 
 // Option configures the client.
