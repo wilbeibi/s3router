@@ -1,6 +1,6 @@
 # s3router
 
-`s3router` is a lightweight `http.RoundTripper` that routes S3-compatible HTTP traffic between two storage endpoints (`primary` & `secondary`) using a simple YAML configuration.
+`s3router` is a lightweight Go library that routes S3-compatible API calls between two storage endpoints (`primary` & `secondary`) using a simple YAML configuration.
 
 Designed for robust and flexible cloud storage scenarios, it supports:
 * **Mirrored writes** for warm-replica durability.
