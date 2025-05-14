@@ -58,9 +58,8 @@ func New(cfg *config.Config,
 func S3Clients(cfg *config.Config,
 	primarySDK, secondarySDK *s3.Client,
 	opts ...Option) (store.Store, error) {
-	primaryStore := store.NewAWSStore(primarySDK)
-	secondaryStore := store.NewAWSStore(secondarySDK)
-	return New(cfg, primaryStore, secondaryStore, opts...)
+	// *s3.Client already satisfies store.Store, so pass directly
+	return New(cfg, primarySDK, secondarySDK, opts...)
 }
 
 type router struct {

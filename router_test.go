@@ -13,8 +13,9 @@ import (
 )
 
 var (
-	primary   = store.NewAWSStore(&s3.Client{})
-	secondary = store.NewAWSStore(&s3.Client{})
+	// raw *s3.Client implements store.Store interface directly
+	primary   store.Store = &s3.Client{}
+	secondary store.Store = &s3.Client{}
 )
 
 func opString(errOn store.Store, err error) func(context.Context, store.Store, string) (string, error) {

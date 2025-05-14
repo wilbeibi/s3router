@@ -27,19 +27,18 @@ go get github.com/wilbeibi/s3router
 	defer f.Close()
 	routerCfg, _ := config.Load(f)
 
-	primaryClient := s3.NewFromConfig(s3Cfg)
-	secondaryClient := s3.NewFromConfig(r2Cfg)
+	primarySDK := s3.NewFromConfig(s3Cfg)
+	secondarySDK := s3.NewFromConfig(r2Cfg)
 
-	routerClient, _ := s3router.New(routerCfg, primaryClient, secondaryClient)
+	// build the router, wrapping R2 in R2Store (import "github.com/wilbeibi/s3router/contrib/r2")
+	routerClient, _ := s3router.New(routerCfg, primarySDK, r2.NewR2Store(secondarySDK))
 
 	_, _ = routerClient.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket: aws.String("s3photos"),
 		Key:    aws.String("raw/cat.jpg"),
 		Body:   bytes.NewReader([]byte("hello, world")),
 	})
-
-
-```
+}
 
 ## ✦ Example Configuration (`router.yaml`)
 
