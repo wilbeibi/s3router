@@ -9,19 +9,20 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/wilbeibi/s3router/config"
+	"github.com/wilbeibi/s3router/store"
 )
 
 var (
-	primary   = &s3.Client{}
-	secondary = &s3.Client{}
+	primary   = store.NewAWSStore(&s3.Client{})
+	secondary = store.NewAWSStore(&s3.Client{})
 )
 
-func opString(errOn *s3.Client, err error) func(context.Context, *s3.Client, string) (string, error) {
-	return func(_ context.Context, cl *s3.Client, _ string) (string, error) {
-		if cl == errOn {
+func opString(errOn store.Store, err error) func(context.Context, store.Store, string) (string, error) {
+	return func(_ context.Context, st store.Store, _ string) (string, error) {
+		if st == errOn {
 			return "", err
 		}
-		if cl == primary {
+		if st == primary {
 			return "primary", nil
 		}
 		return "secondary", nil
@@ -55,7 +56,7 @@ func TestDoParallel_BestEffort(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	op := func(_ context.Context, cl *s3.Client, _ string) (string, error) {
+	op := func(_ context.Context, cl store.Store, _ string) (string, error) {
 		defer wg.Done()
 		if cl == primary {
 			return "primary", nil

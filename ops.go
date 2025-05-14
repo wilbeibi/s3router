@@ -8,9 +8,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/wilbeibi/s3router/config"
+	"github.com/wilbeibi/s3router/store"
 )
 
-func (c *client) routeAction(op, bucket, key string) (config.Action, error) {
+func (c *router) routeAction(op, bucket, key string) (config.Action, error) {
 	if !c.cfg.IsLogicalBucket(bucket) {
 		return "", fmt.Errorf("%s: bucket %q is not configured", op, bucket)
 	}
@@ -18,7 +19,7 @@ func (c *client) routeAction(op, bucket, key string) (config.Action, error) {
 	return action, nil
 }
 
-func (c *client) GetObject(
+func (c *router) GetObject(
 	ctx context.Context,
 	in *s3.GetObjectInput,
 	optFns ...func(*s3.Options),
@@ -33,15 +34,19 @@ func (c *client) GetObject(
 	inPrimary, inSecondary := *in, *in
 	inPrimary.Bucket, inSecondary.Bucket = aws.String(primB), aws.String(secB)
 	return dispatch(ctx, action,
-		func(ctx context.Context, cl *s3.Client, in *s3.GetObjectInput) (*s3.GetObjectOutput, error) {
-			return cl.GetObject(ctx, in, optFns...)
+		func(ctx context.Context, st store.Store, in *s3.GetObjectInput) (*s3.GetObjectOutput, error) {
+			return st.GetObject(ctx, in, optFns...)
 		},
 		&inPrimary, &inSecondary,
 		c.primary, c.secondary,
 	)
 }
 
-func (c *client) PutObject(ctx context.Context, in *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+func (c *router) PutObject(
+	ctx context.Context,
+	in *s3.PutObjectInput,
+	optFns ...func(*s3.Options),
+) (*s3.PutObjectOutput, error) {
 	const op = "PutObject"
 	bucket, key := aws.ToString(in.Bucket), aws.ToString(in.Key)
 	action, err := c.routeAction(op, bucket, key)
@@ -68,15 +73,19 @@ func (c *client) PutObject(ctx context.Context, in *s3.PutObjectInput, optFns ..
 		inSecondary.Body = r2
 	}
 	return dispatch(ctx, action,
-		func(ctx context.Context, cl *s3.Client, in *s3.PutObjectInput) (*s3.PutObjectOutput, error) {
-			return cl.PutObject(ctx, in, optFns...)
+		func(ctx context.Context, st store.Store, in *s3.PutObjectInput) (*s3.PutObjectOutput, error) {
+			return st.PutObject(ctx, in, optFns...)
 		},
 		&inPrimary, &inSecondary,
 		c.primary, c.secondary,
 	)
 }
 
-func (c *client) HeadObject(ctx context.Context, in *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error) {
+func (c *router) HeadObject(
+	ctx context.Context,
+	in *s3.HeadObjectInput,
+	optFns ...func(*s3.Options),
+) (*s3.HeadObjectOutput, error) {
 	const op = "HeadObject"
 	bucket, key := aws.ToString(in.Bucket), aws.ToString(in.Key)
 	action, err := c.routeAction(op, bucket, key)
@@ -87,15 +96,19 @@ func (c *client) HeadObject(ctx context.Context, in *s3.HeadObjectInput, optFns 
 	inPrimary, inSecondary := *in, *in
 	inPrimary.Bucket, inSecondary.Bucket = aws.String(primB), aws.String(secB)
 	return dispatch(ctx, action,
-		func(ctx context.Context, cl *s3.Client, in *s3.HeadObjectInput) (*s3.HeadObjectOutput, error) {
-			return cl.HeadObject(ctx, in, optFns...)
+		func(ctx context.Context, st store.Store, in *s3.HeadObjectInput) (*s3.HeadObjectOutput, error) {
+			return st.HeadObject(ctx, in, optFns...)
 		},
 		&inPrimary, &inSecondary,
 		c.primary, c.secondary,
 	)
 }
 
-func (c *client) DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectOutput, error) {
+func (c *router) DeleteObject(
+	ctx context.Context,
+	in *s3.DeleteObjectInput,
+	optFns ...func(*s3.Options),
+) (*s3.DeleteObjectOutput, error) {
 	const op = "DeleteObject"
 	bucket, key := aws.ToString(in.Bucket), aws.ToString(in.Key)
 	action, err := c.routeAction(op, bucket, key)
@@ -106,15 +119,15 @@ func (c *client) DeleteObject(ctx context.Context, in *s3.DeleteObjectInput, opt
 	inPrimary, inSecondary := *in, *in
 	inPrimary.Bucket, inSecondary.Bucket = aws.String(primB), aws.String(secB)
 	return dispatch(ctx, action,
-		func(ctx context.Context, cl *s3.Client, in *s3.DeleteObjectInput) (*s3.DeleteObjectOutput, error) {
-			return cl.DeleteObject(ctx, in, optFns...)
+		func(ctx context.Context, st store.Store, in *s3.DeleteObjectInput) (*s3.DeleteObjectOutput, error) {
+			return st.DeleteObject(ctx, in, optFns...)
 		},
 		&inPrimary, &inSecondary,
 		c.primary, c.secondary,
 	)
 }
 
-func (c *client) DeleteObjects(ctx context.Context, in *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
+func (c *router) DeleteObjects(ctx context.Context, in *s3.DeleteObjectsInput, optFns ...func(*s3.Options)) (*s3.DeleteObjectsOutput, error) {
 	const op = "DeleteObjects"
 	bucket := aws.ToString(in.Bucket)
 	action, err := c.routeAction(op, bucket, "")
@@ -125,15 +138,19 @@ func (c *client) DeleteObjects(ctx context.Context, in *s3.DeleteObjectsInput, o
 	inPrimary, inSecondary := *in, *in
 	inPrimary.Bucket, inSecondary.Bucket = aws.String(primB), aws.String(secB)
 	return dispatch(ctx, action,
-		func(ctx context.Context, cl *s3.Client, in *s3.DeleteObjectsInput) (*s3.DeleteObjectsOutput, error) {
-			return cl.DeleteObjects(ctx, in, optFns...)
+		func(ctx context.Context, st store.Store, in *s3.DeleteObjectsInput) (*s3.DeleteObjectsOutput, error) {
+			return st.DeleteObjects(ctx, in, optFns...)
 		},
 		&inPrimary, &inSecondary,
 		c.primary, c.secondary,
 	)
 }
 
-func (c *client) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, optFns ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+func (c *router) ListObjectsV2(
+	ctx context.Context,
+	in *s3.ListObjectsV2Input,
+	optFns ...func(*s3.Options),
+) (*s3.ListObjectsV2Output, error) {
 	const op = "ListObjectsV2"
 	bucket := aws.ToString(in.Bucket)
 	action, err := c.routeAction(op, bucket, "")
@@ -144,8 +161,8 @@ func (c *client) ListObjectsV2(ctx context.Context, in *s3.ListObjectsV2Input, o
 	inPrimary, inSecondary := *in, *in
 	inPrimary.Bucket, inSecondary.Bucket = aws.String(primB), aws.String(secB)
 	return dispatch(ctx, action,
-		func(ctx context.Context, cl *s3.Client, in *s3.ListObjectsV2Input) (*s3.ListObjectsV2Output, error) {
-			return cl.ListObjectsV2(ctx, in, optFns...)
+		func(ctx context.Context, st store.Store, in *s3.ListObjectsV2Input) (*s3.ListObjectsV2Output, error) {
+			return st.ListObjectsV2(ctx, in, optFns...)
 		},
 		&inPrimary, &inSecondary,
 		c.primary, c.secondary,
