@@ -29,9 +29,7 @@ go get github.com/wilbeibi/s3router
 	routerCfg, _ := config.Load(f)
 
 	primaryClient := s3.NewFromConfig(s3Cfg)
-	secondaryClient := s3.NewFromConfig(r2Cfg) // Cloudflare R2 with S3 SDK
-
-	// build the router, wrapping S3 client with the ContentLengthStore wrapper (import "github.com/wilbeibi/s3router/contrib/r2")
+	secondaryClient := s3.NewFromConfig(r2Cfg) // Cloudflare R2 client
 	routerClient, _ := s3router.New(routerCfg, primaryClient, secondaryClient)
 
 	_, _ = routerClient.PutObject(context.TODO(), &s3.PutObjectInput{
