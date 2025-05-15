@@ -20,6 +20,7 @@ Designed for robust and flexible cloud storage scenarios, it supports:
 go get github.com/wilbeibi/s3router
 ```
 
+
 ## ✦ Quick Start Example
 
 ```go
@@ -27,11 +28,11 @@ go get github.com/wilbeibi/s3router
 	defer f.Close()
 	routerCfg, _ := config.Load(f)
 
-	primarySDK := s3.NewFromConfig(s3Cfg)
-	secondarySDK := s3.NewFromConfig(r2Cfg)
+	primaryClient := s3.NewFromConfig(s3Cfg)
+	secondaryClient := s3.NewFromConfig(r2Cfg) // Cloudflare R2 with S3 SDK
 
-	// build the router, wrapping R2 in R2Store (import "github.com/wilbeibi/s3router/contrib/r2")
-	routerClient, _ := s3router.New(routerCfg, primarySDK, r2.NewR2Store(secondarySDK))
+	// build the router, wrapping S3 client with the ContentLengthStore wrapper (import "github.com/wilbeibi/s3router/contrib/r2")
+	routerClient, _ := s3router.New(routerCfg, primaryClient, secondaryClient)
 
 	_, _ = routerClient.PutObject(context.TODO(), &s3.PutObjectInput{
 		Bucket: aws.String("s3photos"),
@@ -39,6 +40,7 @@ go get github.com/wilbeibi/s3router
 		Body:   bytes.NewReader([]byte("hello, world")),
 	})
 }
+```
 
 ## ✦ Example Configuration (`router.yaml`)
 
@@ -87,23 +89,20 @@ rules:
 | `best‑effort` | Send to both; return primary result even if secondary errors.                  |
 | `fallback`    | Primary; switch to secondary on primary failure (≥400 HTTP or network errors). |
 
-## ✦ Routing Algorithm Explained
+## ✦ Store Customizer
 
-1. Parse bucket/key from URL (virtual-host or path-style).
-2. Select the rule matching the longest prefix (`photos/raw/` > `photos/*` > `*/*`).
-3. Match S3 operation (`PutObject`, `GetObject`, default to `"*"`).
-4. Execute the corresponding behavior (`primary`, `secondary`, `mirror`, `best-effort`, `fallback`).
+You can inject custom behaviors into your S3 client. For example, the MyCustomizeClient wrapper auto-sets ContentLength when the body lacks io.Seeker—useful for handling quirks of various S3-compatible providers.
 
-Routing decisions are optimized using O(1) map lookups.
+```go
+import "github.com/wilbeibi/s3router/contrib/my_customize_client"
 
-## ✦ Testing
-
-```bash
-go test ./...
+myClient := my_customize_client.NewMyCustomizeClient(secondaryClient)
+// Wrap the secondary client with the customizer
+routerClient, _ := s3router.New(routerCfg, primaryClient, myClient)
 ```
 
 ## ✦ Roadmap
 
 - [x] Streaming body handling for multi-GB uploads.
-- [ ] Support external request customizers to adjust request/response behavior for non-standard S3-compatible providers(MinIO, Wasabi, R2...).
+- [x] Support external request customizers to adjust request/response behavior for non-standard S3-compatible providers(MinIO, Wasabi, R2...).
 

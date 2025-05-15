@@ -1,4 +1,4 @@
-package r2
+package my_customize_client
 
 import (
 	"bytes"
@@ -10,17 +10,17 @@ import (
 	"github.com/wilbeibi/s3router/store"
 )
 
-// R2Store wraps an s3.Client and injects R2-specific behaviour.
-type R2Store struct{ *s3.Client }
+// MyCustomizeClient wraps an S3 client and injects content-length behavior when missing.
+type MyCustomizeClient struct{ *s3.Client }
 
-var _ store.Store = (*R2Store)(nil)
+var _ store.Store = (*MyCustomizeClient)(nil)
 
-func NewR2Store(client *s3.Client) *R2Store {
-	return &R2Store{client}
+func NewMyCustomizeClient(client *s3.Client) *MyCustomizeClient {
+	return &MyCustomizeClient{client}
 }
 
-// PutObject overrides the embedded PutObject to set ContentLength for R2.
-func (s *R2Store) PutObject(ctx context.Context, in *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
+// PutObject overrides the embedded PutObject to set ContentLength when missing.
+func (s *MyCustomizeClient) PutObject(ctx context.Context, in *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	if in.ContentLength == nil && in.Body != nil {
 		if seeker, ok := in.Body.(io.Seeker); ok {
 			cur, _ := seeker.Seek(0, io.SeekCurrent)
