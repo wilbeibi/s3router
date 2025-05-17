@@ -61,10 +61,11 @@ func (c *router) PutObject(
 			r1, r2 io.Reader
 			err    error
 		)
-		if in.ContentLength != nil && *in.ContentLength < c.maxBufferBytes {
-			r1, r2, err = drainBody(ctx, in.Body)
-		} else {
+		// If ContentLength is not provided, S3 use chunked transfer encoding.
+		if in.ContentLength == nil || *in.ContentLength >= c.maxBufferBytes {
 			r1, r2, err = teeBody(ctx, in.Body)
+		} else {
+			r1, r2, err = drainBody(ctx, in.Body)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: failed to split body for mirror: %w", op, err)
