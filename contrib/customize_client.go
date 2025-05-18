@@ -19,23 +19,40 @@ func NewMyCustomizeClient(client *s3.Client) *MyCustomizeClient {
 	return &MyCustomizeClient{client}
 }
 
+func ensureContentLength(in *s3.PutObjectInput) error {
+	if in.Body == nil || in.ContentLength != nil {
+		return nil
+	}
+
+	if rs, ok := in.Body.(io.ReadSeeker); ok {
+		cur, err := rs.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		defer rs.Seek(cur, io.SeekStart)
+
+		end, err := rs.Seek(0, io.SeekEnd)
+		if err != nil {
+			return err
+		}
+
+		in.ContentLength = aws.Int64(end - cur)
+		return nil
+	}
+
+	data, err := io.ReadAll(in.Body)
+	if err != nil {
+		return err
+	}
+	in.ContentLength = aws.Int64(int64(len(data)))
+	in.Body = bytes.NewReader(data)
+	return nil
+}
+
 // PutObject overrides the embedded PutObject to set ContentLength when missing.
 func (s *MyCustomizeClient) PutObject(ctx context.Context, in *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
-	if in.ContentLength == nil && in.Body != nil {
-		if seeker, ok := in.Body.(io.Seeker); ok {
-			cur, _ := seeker.Seek(0, io.SeekCurrent)
-			end, _ := seeker.Seek(0, io.SeekEnd)
-			size := end - cur
-			_, _ = seeker.Seek(cur, io.SeekStart)
-			in.ContentLength = aws.Int64(size)
-		} else {
-			data, err := io.ReadAll(in.Body)
-			if err != nil {
-				return nil, err
-			}
-			in.ContentLength = aws.Int64(int64(len(data)))
-			in.Body = bytes.NewReader(data)
-		}
+	if err := ensureContentLength(in); err != nil {
+		return nil, err
 	}
 	return s.Client.PutObject(ctx, in, optFns...)
 }
