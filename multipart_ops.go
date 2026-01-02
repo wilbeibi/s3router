@@ -2,9 +2,12 @@ package s3router
 
 import (
 	"context"
+	"fmt"
+	"io"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/wilbeibi/s3router/config"
 	"github.com/wilbeibi/s3router/store"
 )
 
@@ -37,6 +40,26 @@ func (c *router) UploadPart(ctx context.Context, in *s3.UploadPartInput, optFns 
 	primB, secB := c.cfg.PhysicalBuckets(bucket)
 	inPrimary, inSecondary := *in, *in
 	inPrimary.Bucket, inSecondary.Bucket = aws.String(primB), aws.String(secB)
+
+	// Split body for mirror/fallback/best-effort actions
+	if (action == config.ActMirror || action == config.ActFallback || action == config.ActBestEffort) && in.Body != nil {
+		var (
+			r1, r2 io.Reader
+			err    error
+		)
+		// UploadPart typically handles large chunks (5MB-5GB), use streaming
+		if in.ContentLength == nil || *in.ContentLength >= c.maxBufferBytes {
+			r1, r2, err = teeBody(ctx, in.Body)
+		} else {
+			r1, r2, err = drainBody(ctx, in.Body)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s: failed to split body: %w", op, err)
+		}
+		inPrimary.Body = r1
+		inSecondary.Body = r2
+	}
+
 	return dispatch(ctx, action,
 		func(ctx context.Context, st store.Store, in *s3.UploadPartInput) (*s3.UploadPartOutput, error) {
 			return st.UploadPart(ctx, in, optFns...)
