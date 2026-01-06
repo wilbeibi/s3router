@@ -17,6 +17,18 @@ jobs:
         with:
           go-version: "1.22"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          python-version: "3.11"
+
+      - name: Validate router configs
+        run: |
+          uv run scripts/validate_config.py example_router_valid.yaml
+          uv run scripts/validate_config.py scripts/test_valid.yaml
+          ! uv run scripts/validate_config.py example_router_fixed.yaml
+
       - name: Build
         run: go build -v ./...
 
