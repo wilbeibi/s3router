@@ -1,0 +1,18 @@
+endpoints:
+  primary: https://s3.us-west-1.amazonaws.com
+  secondary: https://r2.cloudflarestorage.com
+
+buckets:
+  photos:
+    primary: photos
+    secondary: cf-photos
+
+rules:
+  # INVALID: Child prefix uses secondary, but parent uses primary only
+  # This will cause parent listings to miss child objects
+  - bucket: photos
+    prefix:
+      "raw/":
+        "*": secondary                    # Child uses secondary
+      "*":
+        "*": primary                      # Parent uses primary only

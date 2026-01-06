@@ -1,0 +1,33 @@
+endpoints:
+  primary: https://s3.us-west-1.amazonaws.com
+  secondary: https://r2.cloudflarestorage.com
+
+buckets:
+  photos:
+    primary: photos
+    secondary: cf-photos
+
+rules:
+  # VALID: All prefixes agree on secondary usage for listing
+  # Multipart operations are primary-only
+  - bucket: photos
+    prefix:
+      "raw/":
+        PutObject: mirror
+        DeleteObject: best-effort
+        CreateMultipartUpload: primary
+        UploadPart: primary
+        CompleteMultipartUpload: primary
+        AbortMultipartUpload: primary
+        ListParts: primary
+        GetObject: fallback
+        "*": fallback
+      "processed/":
+        "*": secondary
+      "*":
+        CreateMultipartUpload: primary
+        UploadPart: primary
+        CompleteMultipartUpload: primary
+        AbortMultipartUpload: primary
+        ListParts: primary
+        "*": fallback

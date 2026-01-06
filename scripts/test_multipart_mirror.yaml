@@ -1,0 +1,16 @@
+endpoints:
+  primary: https://s3.us-west-1.amazonaws.com
+  secondary: https://r2.cloudflarestorage.com
+
+buckets:
+  uploads:
+    primary: uploads
+    secondary: cf-uploads
+
+rules:
+  # INVALID: Multipart operations use mirror action
+  # This will fail because secondary doesn't support shared upload IDs
+  - bucket: uploads
+    prefix:
+      "*":
+        "*": mirror                      # Mirror all operations including multipart

@@ -1,0 +1,33 @@
+endpoints:
+  primary: https://s3.us‑west-1.amazonaws.com
+  secondary: https://r2.cloudflarestorage.com
+
+buckets:
+  photos:
+    primary: photos
+    secondary: cf-photos
+
+rules:
+  # Fixed config: parent uses fallback for non-multipart, primary for multipart
+  - bucket: photos
+    prefix:
+      "raw/":
+        PutObject: mirror
+        DeleteObject: best-effort
+        CreateMultipartUpload: primary      # multipart must be single-store
+        UploadPart: primary
+        CompleteMultipartUpload: primary
+        AbortMultipartUpload: primary
+        ListParts: primary
+        GetObject: fallback
+        "*": fallback                      # uses secondary (fallback)
+      "processed/":
+        "*": secondary                     # only secondary
+      "*":                                 # parent prefix
+        # Explicitly override multipart ops to primary
+        CreateMultipartUpload: primary
+        UploadPart: primary
+        CompleteMultipartUpload: primary
+        AbortMultipartUpload: primary
+        ListParts: primary
+        "*": fallback                      # uses secondary (fallback)

@@ -1,0 +1,20 @@
+endpoints:
+  primary: https://s3.us-west-1.amazonaws.com
+  secondary: https://r2.cloudflarestorage.com
+
+buckets:
+  data:
+    primary: data
+    secondary: cf-data
+
+rules:
+  # INVALID: Both issues combined
+  # 1. Child prefix uses secondary, but parent uses primary (prefix mismatch)
+  # 2. Multipart operations use best-effort (multipart issue)
+  - bucket: data
+    prefix:
+      "archive/":
+        "*": secondary
+        UploadPart: best-effort         # Multipart with dual-send
+      "*":
+        "*": primary
