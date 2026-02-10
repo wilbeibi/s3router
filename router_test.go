@@ -109,7 +109,7 @@ func TestDispatch_SelectsCorrectClient(t *testing.T) {
 func TestDrainBody(t *testing.T) {
 	ctx := context.Background()
 	want := []byte("hello‑world")
-	r1, r2, err := drainBody(ctx, bytes.NewReader(want))
+	r1, r2, err := drainBodyLimited(ctx, bytes.NewReader(want), int64(len(want)))
 	if err != nil {
 		t.Fatalf("drainBody error: %v", err)
 	}

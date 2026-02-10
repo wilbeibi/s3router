@@ -56,7 +56,7 @@ func (c *router) PutObject(
 	primB, secB := c.cfg.PhysicalBuckets(bucket)
 	inPrimary, inSecondary := *in, *in
 	inPrimary.Bucket, inSecondary.Bucket = aws.String(primB), aws.String(secB)
-	if action == config.ActMirror && in.Body != nil {
+	if (action == config.ActMirror) && in.Body != nil {
 		var (
 			r1, r2 io.Reader
 			err    error
@@ -65,7 +65,7 @@ func (c *router) PutObject(
 		if in.ContentLength == nil || *in.ContentLength >= c.maxBufferBytes {
 			r1, r2, err = teeBody(ctx, in.Body)
 		} else {
-			r1, r2, err = drainBody(ctx, in.Body)
+			r1, r2, err = drainBodyLimited(ctx, in.Body, c.maxBufferBytes)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: failed to split body for mirror: %w", op, err)
@@ -73,13 +73,75 @@ func (c *router) PutObject(
 		inPrimary.Body = r1
 		inSecondary.Body = r2
 	}
-	return dispatch(ctx, action,
-		func(ctx context.Context, st store.Store, in *s3.PutObjectInput) (*s3.PutObjectOutput, error) {
-			return st.PutObject(ctx, in, optFns...)
-		},
-		&inPrimary, &inSecondary,
-		c.primary, c.secondary,
-	)
+
+	switch action {
+	case config.ActPrimary:
+		return c.primary.PutObject(ctx, &inPrimary, optFns...)
+	case config.ActSecondary:
+		return c.secondary.PutObject(ctx, &inSecondary, optFns...)
+	case config.ActMirror:
+		return dispatch(ctx, action,
+			func(ctx context.Context, st store.Store, in *s3.PutObjectInput) (*s3.PutObjectOutput, error) {
+				return st.PutObject(ctx, in, optFns...)
+			},
+			&inPrimary, &inSecondary,
+			c.primary, c.secondary,
+		)
+	case config.ActBestEffort:
+		// Simplicity rule: for body operations, only support best-effort if the body
+		// is seekable (so we can re-read it for the secondary request).
+		if in.Body != nil {
+			rs, ok := in.Body.(io.ReadSeeker)
+			if !ok {
+				return nil, fmt.Errorf("%s: best-effort requires Body to be io.ReadSeeker", op)
+			}
+			start, err := rs.Seek(0, io.SeekCurrent)
+			if err != nil {
+				return nil, fmt.Errorf("%s: failed to seek body: %w", op, err)
+			}
+			inPrimary.Body = rs
+			out, err := c.primary.PutObject(ctx, &inPrimary, optFns...)
+			if _, serr := rs.Seek(start, io.SeekStart); serr != nil {
+				// Secondary can't run; keep primary result.
+				return out, err
+			}
+			inSecondary.Body = rs
+			_, _ = c.secondary.PutObject(ctx, &inSecondary, optFns...)
+			return out, err
+		}
+		out, err := c.primary.PutObject(ctx, &inPrimary, optFns...)
+		_, _ = c.secondary.PutObject(ctx, &inSecondary, optFns...)
+		return out, err
+	case config.ActFallback:
+		if in.Body != nil {
+			rs, ok := in.Body.(io.ReadSeeker)
+			if !ok {
+				return nil, fmt.Errorf("%s: fallback requires Body to be io.ReadSeeker", op)
+			}
+			start, err := rs.Seek(0, io.SeekCurrent)
+			if err != nil {
+				return nil, fmt.Errorf("%s: failed to seek body: %w", op, err)
+			}
+			inPrimary.Body = rs
+			out, err := c.primary.PutObject(ctx, &inPrimary, optFns...)
+			if err == nil {
+				return out, nil
+			}
+			if _, serr := rs.Seek(start, io.SeekStart); serr != nil {
+				return nil, fmt.Errorf("%s: failed to seek body for fallback: %w", op, serr)
+			}
+			inSecondary.Body = rs
+			return c.secondary.PutObject(ctx, &inSecondary, optFns...)
+		}
+		out, err := c.primary.PutObject(ctx, &inPrimary, optFns...)
+		if err == nil {
+			return out, nil
+		}
+		return c.secondary.PutObject(ctx, &inSecondary, optFns...)
+	default:
+		// Fall back to primary if action is unknown
+		return c.primary.PutObject(ctx, &inPrimary, optFns...)
+	}
 }
 
 func (c *router) HeadObject(

@@ -41,32 +41,88 @@ func (c *router) UploadPart(ctx context.Context, in *s3.UploadPartInput, optFns 
 	inPrimary, inSecondary := *in, *in
 	inPrimary.Bucket, inSecondary.Bucket = aws.String(primB), aws.String(secB)
 
-	// Split body for mirror/fallback/best-effort actions
-	if (action == config.ActMirror || action == config.ActFallback || action == config.ActBestEffort) && in.Body != nil {
-		var (
-			r1, r2 io.Reader
-			err    error
+	switch action {
+	case config.ActPrimary:
+		return c.primary.UploadPart(ctx, &inPrimary, optFns...)
+	case config.ActSecondary:
+		return c.secondary.UploadPart(ctx, &inSecondary, optFns...)
+	case config.ActMirror:
+		if in.Body != nil {
+			var (
+				r1, r2 io.Reader
+				err    error
+			)
+			// UploadPart typically handles large chunks (5MB-5GB), use streaming.
+			if in.ContentLength == nil || *in.ContentLength >= c.maxBufferBytes {
+				r1, r2, err = teeBody(ctx, in.Body)
+			} else {
+				r1, r2, err = drainBodyLimited(ctx, in.Body, c.maxBufferBytes)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("%s: failed to split body for mirror: %w", op, err)
+			}
+			inPrimary.Body = r1
+			inSecondary.Body = r2
+		}
+		return dispatch(ctx, action,
+			func(ctx context.Context, st store.Store, in *s3.UploadPartInput) (*s3.UploadPartOutput, error) {
+				return st.UploadPart(ctx, in, optFns...)
+			},
+			&inPrimary, &inSecondary,
+			c.primary, c.secondary,
 		)
-		// UploadPart typically handles large chunks (5MB-5GB), use streaming
-		if in.ContentLength == nil || *in.ContentLength >= c.maxBufferBytes {
-			r1, r2, err = teeBody(ctx, in.Body)
-		} else {
-			r1, r2, err = drainBody(ctx, in.Body)
+	case config.ActBestEffort:
+		if in.Body != nil {
+			rs, ok := in.Body.(io.ReadSeeker)
+			if !ok {
+				return nil, fmt.Errorf("%s: best-effort requires Body to be io.ReadSeeker", op)
+			}
+			start, err := rs.Seek(0, io.SeekCurrent)
+			if err != nil {
+				return nil, fmt.Errorf("%s: failed to seek body: %w", op, err)
+			}
+			inPrimary.Body = rs
+			out, err := c.primary.UploadPart(ctx, &inPrimary, optFns...)
+			if _, serr := rs.Seek(start, io.SeekStart); serr != nil {
+				return out, err
+			}
+			inSecondary.Body = rs
+			_, _ = c.secondary.UploadPart(ctx, &inSecondary, optFns...)
+			return out, err
 		}
-		if err != nil {
-			return nil, fmt.Errorf("%s: failed to split body: %w", op, err)
+		out, err := c.primary.UploadPart(ctx, &inPrimary, optFns...)
+		_, _ = c.secondary.UploadPart(ctx, &inSecondary, optFns...)
+		return out, err
+	case config.ActFallback:
+		if in.Body != nil {
+			rs, ok := in.Body.(io.ReadSeeker)
+			if !ok {
+				return nil, fmt.Errorf("%s: fallback requires Body to be io.ReadSeeker", op)
+			}
+			start, err := rs.Seek(0, io.SeekCurrent)
+			if err != nil {
+				return nil, fmt.Errorf("%s: failed to seek body: %w", op, err)
+			}
+			inPrimary.Body = rs
+			out, err := c.primary.UploadPart(ctx, &inPrimary, optFns...)
+			if err == nil {
+				return out, nil
+			}
+			if _, serr := rs.Seek(start, io.SeekStart); serr != nil {
+				return nil, fmt.Errorf("%s: failed to seek body for fallback: %w", op, serr)
+			}
+			inSecondary.Body = rs
+			return c.secondary.UploadPart(ctx, &inSecondary, optFns...)
 		}
-		inPrimary.Body = r1
-		inSecondary.Body = r2
+		out, err := c.primary.UploadPart(ctx, &inPrimary, optFns...)
+		if err == nil {
+			return out, nil
+		}
+		return c.secondary.UploadPart(ctx, &inSecondary, optFns...)
+	default:
+		// Fall back to primary if action is unknown
+		return c.primary.UploadPart(ctx, &inPrimary, optFns...)
 	}
-
-	return dispatch(ctx, action,
-		func(ctx context.Context, st store.Store, in *s3.UploadPartInput) (*s3.UploadPartOutput, error) {
-			return st.UploadPart(ctx, in, optFns...)
-		},
-		&inPrimary, &inSecondary,
-		c.primary, c.secondary,
-	)
 }
 
 func (c *router) CompleteMultipartUpload(ctx context.Context, in *s3.CompleteMultipartUploadInput, optFns ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error) {

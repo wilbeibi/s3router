@@ -85,7 +85,10 @@ rules:
 | `secondary`   | Always secondary only.                                                         |
 | `mirror`      | Send to both; fail if either copy errors.                                      |
 | `best‑effort` | Send to both; return primary result even if secondary errors.                  |
-| `fallback`    | Primary; switch to secondary on primary failure (≥400 HTTP or network errors). |
+| `fallback`    | Primary; switch to secondary on primary error.                                  |
+
+Notes:
+* For operations with request bodies (e.g. `PutObject`, `UploadPart`), `best‑effort` and `fallback` require `Body` to be an `io.ReadSeeker` (the router may need to re-read the body).
 
 ## ✦ Store Customizer
 
@@ -103,4 +106,3 @@ routerClient, _ := s3router.New(routerCfg, primaryClient, myClient)
 
 - [x] Streaming body handling for multi-GB uploads.
 - [x] Support external request customizers to adjust request/response behavior for non-standard S3-compatible providers(MinIO, Wasabi, R2...).
-

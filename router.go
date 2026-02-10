@@ -19,6 +19,8 @@ package s3router
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"sync"
 
@@ -123,13 +125,29 @@ func doParallel[I any, T any](
 	return out, err
 }
 
-func drainBody(ctx context.Context, r io.Reader) (io.ReadSeeker, io.ReadSeeker, error) {
-	data, err := io.ReadAll(r)
+func readAllLimited(ctx context.Context, r io.Reader, maxBytes int64) ([]byte, error) {
+	if maxBytes < 0 {
+		return nil, errors.New("maxBytes must be >= 0")
+	}
+	// +1 so we can detect overflow without allocating unbounded memory.
+	lr := &io.LimitedReader{R: r, N: maxBytes + 1}
+	data, err := io.ReadAll(lr)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("body too large to buffer (%d > %d bytes)", len(data), maxBytes)
 	}
 	if ctx.Err() != nil {
-		return nil, nil, ctx.Err()
+		return nil, ctx.Err()
+	}
+	return data, nil
+}
+
+func drainBodyLimited(ctx context.Context, r io.Reader, maxBytes int64) (io.ReadSeeker, io.ReadSeeker, error) {
+	data, err := readAllLimited(ctx, r, maxBytes)
+	if err != nil {
+		return nil, nil, err
 	}
 	return bytes.NewReader(data), bytes.NewReader(data), nil
 }
@@ -137,22 +155,31 @@ func drainBody(ctx context.Context, r io.Reader) (io.ReadSeeker, io.ReadSeeker, 
 func teeBody(ctx context.Context, r io.Reader) (io.ReadCloser, io.ReadCloser, error) {
 	pr1, pw1 := io.Pipe()
 	pr2, pw2 := io.Pipe()
+	copyDone := make(chan struct{})
 	go func() {
-		defer pw1.Close()
-		defer pw2.Close()
-
+		defer close(copyDone)
+		_, err := io.Copy(io.MultiWriter(pw1, pw2), r)
+		// Close the writers on completion. If ctx was canceled, prefer its error.
+		if cerr := ctx.Err(); cerr != nil {
+			_ = pw1.CloseWithError(cerr)
+			_ = pw2.CloseWithError(cerr)
+			return
+		}
+		if err != nil {
+			_ = pw1.CloseWithError(err)
+			_ = pw2.CloseWithError(err)
+			return
+		}
+		_ = pw1.Close()
+		_ = pw2.Close()
+	}()
+	go func() {
 		select {
 		case <-ctx.Done():
 			err := ctx.Err()
-			pw1.CloseWithError(err)
-			pw2.CloseWithError(err)
-			return
-		default:
-			_, err := io.Copy(io.MultiWriter(pw1, pw2), r)
-			if err != nil {
-				pw1.CloseWithError(err)
-				pw2.CloseWithError(err)
-			}
+			_ = pw1.CloseWithError(err)
+			_ = pw2.CloseWithError(err)
+		case <-copyDone:
 		}
 	}()
 
