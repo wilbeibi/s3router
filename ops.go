@@ -56,22 +56,30 @@ func (c *router) PutObject(
 	primB, secB := c.cfg.PhysicalBuckets(bucket)
 	inPrimary, inSecondary := *in, *in
 	inPrimary.Bucket, inSecondary.Bucket = aws.String(primB), aws.String(secB)
-	if action == config.ActMirror && in.Body != nil {
+	if (action == config.ActMirror || action == config.ActBestEffort || action == config.ActFallback) && in.Body != nil {
 		var (
 			r1, r2 io.Reader
 			err    error
 		)
 		// If ContentLength is not provided, S3 use chunked transfer encoding.
 		if in.ContentLength == nil || *in.ContentLength >= c.maxBufferBytes {
-			r1, r2, err = teeBody(ctx, in.Body)
+			// For large bodies, we can only support parallel actions (Mirror, BestEffort).
+			// Fallback requires buffering or seeking, which we can't do for generic streams.
+			if action == config.ActFallback {
+				return nil, fmt.Errorf("%s: fallback strategy is not supported for large or unknown-length streams", op)
+			}
+			tolerant := (action == config.ActBestEffort)
+			r1, r2, err = teeBody(ctx, in.Body, tolerant)
 		} else {
 			r1, r2, err = drainBody(ctx, in.Body)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("%s: failed to split body for mirror: %w", op, err)
+			return nil, fmt.Errorf("%s: failed to split body for %s: %w", op, action, err)
 		}
-		inPrimary.Body = r1
-		inSecondary.Body = r2
+		if r1 != nil && r2 != nil {
+			inPrimary.Body = r1
+			inSecondary.Body = r2
+		}
 	}
 	return dispatch(ctx, action,
 		func(ctx context.Context, st store.Store, in *s3.PutObjectInput) (*s3.PutObjectOutput, error) {

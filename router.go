@@ -116,10 +116,10 @@ func doParallel[I any, T any](
 		return out, nil
 	}
 	// best-effort: fire-and-forget secondary
-	out, err := op(ctx, s1, in1)
 	go func() {
 		_, _ = op(ctx, s2, in2)
 	}()
+	out, err := op(ctx, s1, in1)
 	return out, err
 }
 
@@ -134,24 +134,72 @@ func drainBody(ctx context.Context, r io.Reader) (io.ReadSeeker, io.ReadSeeker, 
 	return bytes.NewReader(data), bytes.NewReader(data), nil
 }
 
-func teeBody(ctx context.Context, r io.Reader) (io.ReadCloser, io.ReadCloser, error) {
+// tolerantWriter wraps an io.Writer and ignores errors from the underlying writer.
+type tolerantWriter struct {
+	w      io.Writer
+	failed bool
+}
+
+func (t *tolerantWriter) Write(p []byte) (n int, err error) {
+	if t.failed {
+		return len(p), nil
+	}
+	n, err = t.w.Write(p)
+	if err != nil {
+		t.failed = true
+		// Act as if we wrote everything to keep MultiWriter happy.
+		return len(p), nil
+	}
+	return n, nil
+}
+
+func teeBody(ctx context.Context, r io.Reader, tolerantSecondary bool) (io.ReadCloser, io.ReadCloser, error) {
 	pr1, pw1 := io.Pipe()
 	pr2, pw2 := io.Pipe()
 	go func() {
 		defer pw1.Close()
 		defer pw2.Close()
 
-		select {
-		case <-ctx.Done():
-			err := ctx.Err()
-			pw1.CloseWithError(err)
-			pw2.CloseWithError(err)
-			return
-		default:
-			_, err := io.Copy(io.MultiWriter(pw1, pw2), r)
-			if err != nil {
+		var w2 io.Writer = pw2
+		if tolerantSecondary {
+			w2 = &tolerantWriter{w: pw2}
+		}
+		mw := io.MultiWriter(pw1, w2)
+
+		buf := make([]byte, 32*1024)
+		for {
+			select {
+			case <-ctx.Done():
+				err := ctx.Err()
 				pw1.CloseWithError(err)
 				pw2.CloseWithError(err)
+				return
+			default:
+			}
+
+			nr, er := r.Read(buf)
+			if nr > 0 {
+				nw, ew := mw.Write(buf[0:nr])
+				if ew != nil {
+					// Check if error is from pw1
+					// If tolerantWriter wrapped pw2, it won't return error.
+					// So any error here means pw1 failed (or tolerantWriter itself failed unexpectedly).
+					pw1.CloseWithError(ew)
+					pw2.CloseWithError(ew)
+					return
+				}
+				if nr != nw {
+					pw1.CloseWithError(io.ErrShortWrite)
+					pw2.CloseWithError(io.ErrShortWrite)
+					return
+				}
+			}
+			if er != nil {
+				if er != io.EOF {
+					pw1.CloseWithError(er)
+					pw2.CloseWithError(er)
+				}
+				return
 			}
 		}
 	}()

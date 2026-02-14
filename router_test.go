@@ -124,7 +124,7 @@ func TestTeeBody(t *testing.T) {
 	ctx := context.Background()
 	want := []byte("stream‑content")
 
-	pr1, pr2, err := teeBody(ctx, bytes.NewReader(want))
+	pr1, pr2, err := teeBody(ctx, bytes.NewReader(want), false)
 	if err != nil {
 		t.Fatalf("teeBody error: %v", err)
 	}
