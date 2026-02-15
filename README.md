@@ -95,7 +95,7 @@ Notes:
 You can inject custom behaviors into your S3 client. For example, the MyCustomizeClient wrapper auto-sets ContentLength when the body lacks io.Seeker—useful for handling quirks of various S3-compatible providers.
 
 ```go
-import "github.com/wilbeibi/s3router/contrib/my_customize_client"
+import "github.com/wilbeibi/s3router/contrib"
 
 myClient := my_customize_client.NewMyCustomizeClient(secondaryClient)
 // Wrap the secondary client with the customizer

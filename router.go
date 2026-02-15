@@ -110,12 +110,12 @@ func doParallel[I any, T any](
 	s1, s2 store.Store,
 ) (T, error) {
 	var wg sync.WaitGroup
-	var out T
+	var outA T
 	var errA, errB error
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		out, errA = op(ctx, s1, in1)
+		outA, errA = op(ctx, s1, in1)
 	}()
 	go func() {
 		defer wg.Done()
@@ -130,7 +130,7 @@ func doParallel[I any, T any](
 		var zero T
 		return zero, errB
 	}
-	return out, nil
+	return outA, nil
 }
 
 func readAllLimited(ctx context.Context, r io.Reader, maxBytes int64) ([]byte, error) {

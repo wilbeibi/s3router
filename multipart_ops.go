@@ -165,7 +165,7 @@ func (c *router) ListParts(ctx context.Context, in *s3.ListPartsInput, optFns ..
 	inPrimary.Bucket, inSecondary.Bucket = aws.String(primB), aws.String(secB)
 	return dispatch(ctx, action,
 		func(ctx context.Context, st store.Store, in *s3.ListPartsInput) (*s3.ListPartsOutput, error) {
-			return st.ListParts(ctx, in)
+			return st.ListParts(ctx, in, optFns...)
 		},
 		&inPrimary, &inSecondary,
 		c.primary, c.secondary,
