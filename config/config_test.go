@@ -30,7 +30,7 @@ rules:
     prefix:
       "raw/":
         PutObject: mirror # primary & secondary must succeed
-        DeleteObject: best-effort # if primary fails, return secondary's response
+        DeleteObject: best-effort # primary first, always try secondary
         CompleteMultipartUpload: mirror
         GetObject: fallback
         "*": fallback # all other ops → fallback read path

@@ -84,15 +84,24 @@ func (c *router) UploadPart(ctx context.Context, in *s3.UploadPartInput, optFns 
 			inPrimary.Body = rs
 			out, err := c.primary.UploadPart(ctx, &inPrimary, optFns...)
 			if _, serr := rs.Seek(start, io.SeekStart); serr != nil {
-				return out, err
+				if err == nil {
+					return out, nil
+				}
+				return nil, fmt.Errorf("%s: failed to seek body for best-effort: %w", op, serr)
 			}
 			inSecondary.Body = rs
-			_, _ = c.secondary.UploadPart(ctx, &inSecondary, optFns...)
-			return out, err
+			out2, err2 := c.secondary.UploadPart(ctx, &inSecondary, optFns...)
+			if err == nil {
+				return out, nil
+			}
+			return out2, err2
 		}
 		out, err := c.primary.UploadPart(ctx, &inPrimary, optFns...)
-		_, _ = c.secondary.UploadPart(ctx, &inSecondary, optFns...)
-		return out, err
+		out2, err2 := c.secondary.UploadPart(ctx, &inSecondary, optFns...)
+		if err == nil {
+			return out, nil
+		}
+		return out2, err2
 	case config.ActFallback:
 		if in.Body != nil {
 			rs, ok := in.Body.(io.ReadSeeker)

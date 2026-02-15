@@ -7,8 +7,9 @@ flowchart TD
     W -->|2| route
     route -->|3a choose| lookup
     lookup --> route
-    route -->|3b dispatch| doSerial & doParallel
+    route -->|3b dispatch| doSerial & doBestEffort & doParallel
     doSerial -->|4| primaryFn & secondaryFn
+    doBestEffort -->|4| primaryFn & secondaryFn
     doParallel -->|4| primaryFn & secondaryFn
     primaryFn -->|5| primarySDK[s3.Client.GetObject]
     secondaryFn -->|5| secondarySDK[s3.Client.GetObject]
@@ -71,7 +72,7 @@ type router struct {
 	maxBufferBytes int64 // 256 MiB default
 }
 
-// Serial "primary-then-secondary if needed" (fallback).
+// Serial "primary first, secondary on primary error" path for fallback.
 func doSerial[I any, T any](
 	ctx context.Context,
 	op func(context.Context, store.Store, I) (T, error),
@@ -85,44 +86,51 @@ func doSerial[I any, T any](
 	return op(ctx, s2, in2)
 }
 
-// Parallel dual-write/read. strict==true => mirror; false => best-effort.
-func doParallel[I any, T any](
+// Serial best-effort path:
+// primary first; always attempt secondary; keep primary success.
+func doBestEffort[I any, T any](
 	ctx context.Context,
-	strict bool,
 	op func(context.Context, store.Store, I) (T, error),
 	in1, in2 I,
 	s1, s2 store.Store,
 ) (T, error) {
-	if strict {
-		var wg sync.WaitGroup
-		var out T
-		var errA, errB error
-		wg.Add(2)
-		go func() {
-			defer wg.Done()
-			out, errA = op(ctx, s1, in1)
-		}()
-		go func() {
-			defer wg.Done()
-			_, errB = op(ctx, s2, in2)
-		}()
-		wg.Wait()
-		if errA != nil {
-			var zero T
-			return zero, errA
-		}
-		if errB != nil {
-			var zero T
-			return zero, errB
-		}
+	out, err := op(ctx, s1, in1)
+	if err == nil {
+		_, _ = op(ctx, s2, in2)
 		return out, nil
 	}
-	// best-effort: fire-and-forget secondary
-	out, err := op(ctx, s1, in1)
+	return op(ctx, s2, in2)
+}
+
+// Parallel dual-write/read for mirror.
+func doParallel[I any, T any](
+	ctx context.Context,
+	op func(context.Context, store.Store, I) (T, error),
+	in1, in2 I,
+	s1, s2 store.Store,
+) (T, error) {
+	var wg sync.WaitGroup
+	var out T
+	var errA, errB error
+	wg.Add(2)
 	go func() {
-		_, _ = op(ctx, s2, in2)
+		defer wg.Done()
+		out, errA = op(ctx, s1, in1)
 	}()
-	return out, err
+	go func() {
+		defer wg.Done()
+		_, errB = op(ctx, s2, in2)
+	}()
+	wg.Wait()
+	if errA != nil {
+		var zero T
+		return zero, errA
+	}
+	if errB != nil {
+		var zero T
+		return zero, errB
+	}
+	return out, nil
 }
 
 func readAllLimited(ctx context.Context, r io.Reader, maxBytes int64) ([]byte, error) {
@@ -202,9 +210,9 @@ func dispatch[I any, T any](
 	case config.ActFallback:
 		return doSerial(ctx, op, primaryInput, secondaryInput, s1, s2)
 	case config.ActBestEffort:
-		return doParallel(ctx, false, op, primaryInput, secondaryInput, s1, s2)
+		return doBestEffort(ctx, op, primaryInput, secondaryInput, s1, s2)
 	case config.ActMirror:
-		return doParallel(ctx, true, op, primaryInput, secondaryInput, s1, s2)
+		return doParallel(ctx, op, primaryInput, secondaryInput, s1, s2)
 	default:
 		// Fall back to primary if action is unknown
 		return op(ctx, s1, primaryInput)

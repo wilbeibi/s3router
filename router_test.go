@@ -45,7 +45,7 @@ func TestDoSerial_Fallback(t *testing.T) {
 
 func TestDoParallel_MirrorStrict(t *testing.T) {
 	// secondary fails => overall error
-	_, err := doParallel(context.Background(), true,
+	_, err := doParallel(context.Background(),
 		opString(secondary, io.ErrUnexpectedEOF),
 		"", "", primary, secondary)
 	if err == nil {
@@ -53,25 +53,58 @@ func TestDoParallel_MirrorStrict(t *testing.T) {
 	}
 }
 
-func TestDoParallel_BestEffort(t *testing.T) {
-	var wg sync.WaitGroup
-	wg.Add(2)
-
+func TestDispatch_BestEffort_PrimarySuccessStillCallsSecondary(t *testing.T) {
+	var primaryCalls, secondaryCalls int
 	op := func(_ context.Context, cl store.Store, _ string) (string, error) {
-		defer wg.Done()
 		if cl == primary {
+			primaryCalls++
 			return "primary", nil
 		}
+		secondaryCalls++
 		return "secondary", nil
 	}
-
-	out, err := doParallel(context.Background(), false, /*best‑effort*/
+	out, err := dispatch(context.Background(), config.ActBestEffort,
 		op, "", "", primary, secondary)
 	if err != nil || out != "primary" {
 		t.Fatalf("unexpected result: out=%q err=%v", out, err)
 	}
+	if primaryCalls != 1 || secondaryCalls != 1 {
+		t.Fatalf("expected calls primary/secondary=1/1, got %d/%d", primaryCalls, secondaryCalls)
+	}
+}
 
-	wg.Wait()
+func TestDispatch_BestEffort_PrimarySuccessIgnoresSecondaryError(t *testing.T) {
+	op := func(_ context.Context, cl store.Store, _ string) (string, error) {
+		if cl == primary {
+			return "primary", nil
+		}
+		return "", io.ErrUnexpectedEOF
+	}
+	out, err := dispatch(context.Background(), config.ActBestEffort,
+		op, "", "", primary, secondary)
+	if err != nil || out != "primary" {
+		t.Fatalf("unexpected result: out=%q err=%v", out, err)
+	}
+}
+
+func TestDispatch_BestEffort_PrimaryFailureFallsBack(t *testing.T) {
+	var primaryCalls, secondaryCalls int
+	op := func(_ context.Context, cl store.Store, _ string) (string, error) {
+		if cl == primary {
+			primaryCalls++
+			return "", io.EOF
+		}
+		secondaryCalls++
+		return "secondary", nil
+	}
+	out, err := dispatch(context.Background(), config.ActBestEffort,
+		op, "", "", primary, secondary)
+	if err != nil || out != "secondary" {
+		t.Fatalf("unexpected result: out=%q err=%v", out, err)
+	}
+	if primaryCalls != 1 || secondaryCalls != 1 {
+		t.Fatalf("expected calls primary/secondary=1/1, got %d/%d", primaryCalls, secondaryCalls)
+	}
 }
 
 func TestDispatch_SelectsCorrectClient(t *testing.T) {

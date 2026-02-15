@@ -119,7 +119,7 @@ func TestPutObject_BestEffort_RequiresReadSeeker(t *testing.T) {
 	}
 }
 
-func TestPutObject_BestEffort_ReplaysReadSeeker(t *testing.T) {
+func TestPutObject_BestEffort_PrimarySuccessAlsoCallsSecondary(t *testing.T) {
 	primary := &recordStore{}
 	secondary := &recordStore{}
 	r, err := New(testCfg(config.ActBestEffort), primary, secondary)
@@ -142,10 +142,52 @@ func TestPutObject_BestEffort_ReplaysReadSeeker(t *testing.T) {
 	}
 
 	if len(primary.putBodies) != 1 || len(secondary.putBodies) != 1 {
-		t.Fatalf("expected 1 primary and 1 secondary call, got %d/%d", len(primary.putBodies), len(secondary.putBodies))
+		t.Fatalf("expected 1 primary and 1 secondary calls, got %d/%d", len(primary.putBodies), len(secondary.putBodies))
 	}
 	if string(primary.putBodies[0]) != "llo" || string(secondary.putBodies[0]) != "llo" {
 		t.Fatalf("body mismatch: primary=%q secondary=%q", primary.putBodies[0], secondary.putBodies[0])
+	}
+}
+
+func TestPutObject_BestEffort_PrimarySuccessIgnoresSecondaryError(t *testing.T) {
+	primary := &recordStore{}
+	secondary := &recordStore{putErr: errors.New("secondary failed")}
+	r, err := New(testCfg(config.ActBestEffort), primary, secondary)
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	in := &s3.PutObjectInput{
+		Bucket: aws.String("lb"),
+		Key:    aws.String("k"),
+		Body:   bytes.NewReader([]byte("hello")),
+	}
+	if _, err := r.PutObject(context.Background(), in); err != nil {
+		t.Fatalf("expected primary success to be returned, got error: %v", err)
+	}
+	if len(secondary.putBodies) != 1 || string(secondary.putBodies[0]) != "hello" {
+		t.Fatalf("expected secondary attempt with full body, got %q", secondary.putBodies)
+	}
+}
+
+func TestPutObject_BestEffort_FallsBackOnPrimaryError(t *testing.T) {
+	primary := &recordStore{putErr: errors.New("primary failed")}
+	secondary := &recordStore{}
+	r, err := New(testCfg(config.ActBestEffort), primary, secondary)
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	in := &s3.PutObjectInput{
+		Bucket: aws.String("lb"),
+		Key:    aws.String("k"),
+		Body:   bytes.NewReader([]byte("hello")),
+	}
+	if _, err := r.PutObject(context.Background(), in); err != nil {
+		t.Fatalf("expected best-effort fallback to succeed, got error: %v", err)
+	}
+	if len(secondary.putBodies) != 1 || string(secondary.putBodies[0]) != "hello" {
+		t.Fatalf("expected secondary to receive body, got %q", secondary.putBodies)
 	}
 }
 
@@ -187,6 +229,52 @@ func TestUploadPart_BestEffort_RequiresReadSeeker(t *testing.T) {
 	}
 	if _, err := r.UploadPart(context.Background(), in); err == nil {
 		t.Fatalf("expected error, got nil")
+	}
+}
+
+func TestUploadPart_BestEffort_FallsBackOnPrimaryError(t *testing.T) {
+	primary := &recordStore{uploadPartErr: errors.New("primary failed")}
+	secondary := &recordStore{}
+	r, err := New(testCfg(config.ActBestEffort), primary, secondary)
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	in := &s3.UploadPartInput{
+		Bucket:     aws.String("lb"),
+		Key:        aws.String("k"),
+		PartNumber: aws.Int32(1),
+		UploadId:   aws.String("u"),
+		Body:       bytes.NewReader([]byte("part")),
+	}
+	if _, err := r.UploadPart(context.Background(), in); err != nil {
+		t.Fatalf("expected best-effort fallback to succeed, got error: %v", err)
+	}
+	if len(secondary.uploadPartBodies) != 1 || string(secondary.uploadPartBodies[0]) != "part" {
+		t.Fatalf("expected secondary to receive body, got %q", secondary.uploadPartBodies)
+	}
+}
+
+func TestUploadPart_BestEffort_PrimarySuccessIgnoresSecondaryError(t *testing.T) {
+	primary := &recordStore{}
+	secondary := &recordStore{uploadPartErr: errors.New("secondary failed")}
+	r, err := New(testCfg(config.ActBestEffort), primary, secondary)
+	if err != nil {
+		t.Fatalf("New error: %v", err)
+	}
+
+	in := &s3.UploadPartInput{
+		Bucket:     aws.String("lb"),
+		Key:        aws.String("k"),
+		PartNumber: aws.Int32(1),
+		UploadId:   aws.String("u"),
+		Body:       bytes.NewReader([]byte("part")),
+	}
+	if _, err := r.UploadPart(context.Background(), in); err != nil {
+		t.Fatalf("expected primary success to be returned, got error: %v", err)
+	}
+	if len(secondary.uploadPartBodies) != 1 || string(secondary.uploadPartBodies[0]) != "part" {
+		t.Fatalf("expected secondary attempt with full body, got %q", secondary.uploadPartBodies)
 	}
 }
 

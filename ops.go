@@ -88,8 +88,6 @@ func (c *router) PutObject(
 			c.primary, c.secondary,
 		)
 	case config.ActBestEffort:
-		// Simplicity rule: for body operations, only support best-effort if the body
-		// is seekable (so we can re-read it for the secondary request).
 		if in.Body != nil {
 			rs, ok := in.Body.(io.ReadSeeker)
 			if !ok {
@@ -102,16 +100,24 @@ func (c *router) PutObject(
 			inPrimary.Body = rs
 			out, err := c.primary.PutObject(ctx, &inPrimary, optFns...)
 			if _, serr := rs.Seek(start, io.SeekStart); serr != nil {
-				// Secondary can't run; keep primary result.
-				return out, err
+				if err == nil {
+					return out, nil
+				}
+				return nil, fmt.Errorf("%s: failed to seek body for best-effort: %w", op, serr)
 			}
 			inSecondary.Body = rs
-			_, _ = c.secondary.PutObject(ctx, &inSecondary, optFns...)
-			return out, err
+			out2, err2 := c.secondary.PutObject(ctx, &inSecondary, optFns...)
+			if err == nil {
+				return out, nil
+			}
+			return out2, err2
 		}
 		out, err := c.primary.PutObject(ctx, &inPrimary, optFns...)
-		_, _ = c.secondary.PutObject(ctx, &inSecondary, optFns...)
-		return out, err
+		out2, err2 := c.secondary.PutObject(ctx, &inSecondary, optFns...)
+		if err == nil {
+			return out, nil
+		}
+		return out2, err2
 	case config.ActFallback:
 		if in.Body != nil {
 			rs, ok := in.Body.(io.ReadSeeker)

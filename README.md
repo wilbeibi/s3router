@@ -63,7 +63,7 @@ rules:
     prefix:
       "raw/":
         PutObject: mirror       # both writes must succeed
-        DeleteObject: best-effort  # ignore secondary errors
+        DeleteObject: best-effort  # primary first; also attempt secondary
         GetObject: fallback     # fallback‐on‐error reads
         "*": fallback           # default fallback for other ops
       "processed/":
@@ -84,7 +84,7 @@ rules:
 | `primary`     | Always primary only.                                                           |
 | `secondary`   | Always secondary only.                                                         |
 | `mirror`      | Send to both; fail if either copy errors.                                      |
-| `best‑effort` | Send to both; return primary result even if secondary errors.                  |
+| `best‑effort` | Primary first; also attempt secondary. Return primary success even if secondary errors. |
 | `fallback`    | Primary; switch to secondary on primary error.                                  |
 
 Notes:
