@@ -49,7 +49,13 @@ func (c *router) UploadPart(ctx context.Context, in *s3.UploadPartInput, optFns 
 		)
 		// UploadPart typically handles large chunks (5MB-5GB), use streaming
 		if in.ContentLength == nil || *in.ContentLength >= c.maxBufferBytes {
-			r1, r2, err = teeBody(ctx, in.Body)
+			// For large bodies, we can only support parallel actions (Mirror, BestEffort).
+			// Fallback requires buffering or seeking, which we can't do for generic streams.
+			if action == config.ActFallback {
+				return nil, fmt.Errorf("%s: fallback strategy is not supported for large or unknown-length streams", op)
+			}
+			tolerant := (action == config.ActBestEffort)
+			r1, r2, err = teeBody(ctx, in.Body, tolerant)
 		} else {
 			r1, r2, err = drainBody(ctx, in.Body)
 		}
